@@ -68,12 +68,12 @@ jobs:
           # access user-namespace GHCR packages with the built-in token.
           password: ${{ secrets.GHCR_PAT }}
 
-      - name: Create & push manifest (Docker Hub - unstable)
+      - name: Create & push manifest (GHCR - latest)
         run: |
           DATE=${{ needs.prepare.outputs.build_date }}
           docker buildx imagetools create \
-            -t ghcr.io/recho-design/axonhub:unstable \
-            ghcr.io/recho-design/axonhub:unstable-amd64
+            -t ghcr.io/recho-design/axonhub:latest \
+            ghcr.io/recho-design/axonhub:latest-amd64
           docker buildx imagetools create \
-            -t ghcr.io/recho-design/axonhub:unstable-${DATE} \
-            ghcr.io/recho-design/axonhub:unstable-${DATE}-amd64
+            -t ghcr.io/recho-design/axonhub:${DATE} \
+            ghcr.io/recho-design/axonhub:${DATE}-amd64

@@ -111,8 +111,8 @@ jobs:
               ;;
             unstable)
               printf -v TAGS '%s\n%s' \
-                "ghcr.io/recho-design/axonhub:unstable-${ARCH}" \
-                "ghcr.io/recho-design/axonhub:unstable-${BUILD_DATE}-${ARCH}"
+                "ghcr.io/recho-design/axonhub:latest-${ARCH}" \
+                "ghcr.io/recho-design/axonhub:${BUILD_DATE}-${ARCH}"
               ;;
             *)
               echo "Unknown mode: $MODE" >&2
