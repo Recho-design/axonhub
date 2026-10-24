@@ -77,3 +77,29 @@ jobs:
           docker buildx imagetools create \
             -t ghcr.io/recho-design/axonhub:${DATE} \
             ghcr.io/recho-design/axonhub:${DATE}-amd64
+
+      # Keep the package page clean: after a successful publish, delete every
+      # version whose tags are all stale — legacy tags (e.g. unstable*), dated
+      # tags from previous days, and untagged orphans. Versions carrying any
+      # current tag (latest, latest-amd64, DATE, DATE-amd64) are kept; the
+      # arch-suffixed ones must survive because the multi-arch manifest
+      # references their digests.
+      - name: Prune stale package versions
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_PAT }}
+        run: |
+          DATE=${{ needs.prepare.outputs.build_date }}
+          KEEP="latest latest-amd64 ${DATE} ${DATE}-amd64"
+          for id in $(gh api /user/packages/container/axonhub/versions --jq '.[].id'); do
+            TAGS=$(gh api /user/packages/container/axonhub/versions/$id --jq '.metadata.container.tags // [] | join(",")')
+            STALE=1
+            for tag in ${TAGS//,/ }; do
+              for keep in $KEEP; do
+                if [ "$tag" = "$keep" ]; then STALE=0; break 2; fi
+              done
+            done
+            if [ "$STALE" = "1" ]; then
+              echo "Deleting stale version $id (tags: ${TAGS:-<none>})"
+              gh api --method DELETE /user/packages/container/axonhub/versions/$id
+            fi
+          done
