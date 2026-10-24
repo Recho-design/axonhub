@@ -466,23 +466,30 @@ func captureRawProviderResponse(outbound *PersistentOutboundTransformer, systemS
 	})
 }
 
+// passThroughResponseEnabled reports whether the current attempt delivers the raw
+// provider response body instead of the transformed one. Response checks that must
+// inspect the delivered bytes (for example content error detection) reuse it so
+// they never diverge from applyPassThroughResponse.
+func (p *PersistentOutboundTransformer) passThroughResponseEnabled(ctx context.Context, systemService *biz.SystemService) bool {
+	if !p.isPassThroughEnabled(ctx, systemService) &&
+		!responsesTransportAdaptationEnabled(ctx, p, systemService) &&
+		!responsesIdentityPreservationEnabled(p) {
+		return false
+	}
+
+	return p.allowPassThroughResponse(ctx) && p.state.RawProviderResponse != nil
+}
+
 // applyPassThroughResponse replaces the transformed response with the raw provider response
 // when PassThroughBody is enabled and the inbound/outbound API formats match, unless the
 // outbound transformer vetoes it via transformer.PassThroughResponsePolicy.
 func applyPassThroughResponse(outbound *PersistentOutboundTransformer, systemService *biz.SystemService) pipeline.Middleware {
 	return pipeline.OnInboundRawResponse("pass-through-response", func(ctx context.Context, response *httpclient.Response) (*httpclient.Response, error) {
-		if !outbound.isPassThroughEnabled(ctx, systemService) && !responsesTransportAdaptationEnabled(ctx, outbound, systemService) && !responsesIdentityPreservationEnabled(outbound) {
-			return response, nil
-		}
-
-		if !outbound.allowPassThroughResponse(ctx) {
+		if !outbound.passThroughResponseEnabled(ctx, systemService) {
 			return response, nil
 		}
 
 		rawResp := outbound.state.RawProviderResponse
-		if rawResp == nil {
-			return response, nil
-		}
 
 		log.Debug(ctx, "applying pass-through response",
 			log.String("channel", outbound.GetCurrentChannel().Name),

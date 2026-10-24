@@ -95,6 +95,17 @@ func WithEmptyResponseDetection() Option {
 	}
 }
 
+// WithContentErrorDetection enables detection of upstream error text returned as
+// assistant content in a successful non-streaming response. When the content
+// matches the matcher, the response is dropped and an ErrContentErrorMatch error
+// is returned so the existing retry flow handles it as a failed attempt.
+// matcher must be built once per policy change: it holds pre-compiled regexes.
+func WithContentErrorDetection(matcher *ContentErrorMatcher) Option {
+	return func(p *pipeline) {
+		p.contentErrorMatcher = matcher
+	}
+}
+
 func WithResponseTimeouts(streamFirstEventTimeout, nonStreamTimeout time.Duration) Option {
 	return func(p *pipeline) {
 		p.streamFirstEventTimeout = streamFirstEventTimeout
@@ -145,6 +156,7 @@ type pipeline struct {
 	retriesDisabled         bool
 	retryDelay              time.Duration
 	emptyResponseDetection  bool
+	contentErrorMatcher     *ContentErrorMatcher
 	streamFirstEventTimeout time.Duration
 	nonStreamTimeout        time.Duration
 }

@@ -243,6 +243,11 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 
 	var pipelineOpts []pipeline.Option
 
+	// Content error detection inspects non-streaming response content, so the
+	// matcher is only needed for that path; it holds pre-compiled regexes and is
+	// reused until the policy patterns change.
+	contentErrorMatcher := contentErrorMatcherFor(retryPolicy.ContentErrorDetection)
+
 	// Only apply retry if policy is enabled
 	if retryPolicy.Enabled {
 		pipelineOpts = append(pipelineOpts, pipeline.WithRetry(
@@ -253,6 +258,10 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 
 		if retryPolicy.EmptyResponseDetection {
 			pipelineOpts = append(pipelineOpts, pipeline.WithEmptyResponseDetection())
+		}
+
+		if contentErrorMatcher != nil {
+			pipelineOpts = append(pipelineOpts, pipeline.WithContentErrorDetection(contentErrorMatcher))
 		}
 
 		pipelineOpts = append(pipelineOpts, pipeline.WithResponseTimeouts(
@@ -285,6 +294,9 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 		// Response pass-through middlewares run before persistRequest so the raw provider
 		// response is saved when pass-through is enabled.
 		applyPassThroughResponse(outbound, processor.SystemService),
+		// Content error detection reads the pass-through body after the middleware above
+		// replaced the transformed response with the raw provider body.
+		contentErrorDetectionMiddleware(outbound, processor.SystemService, contentErrorMatcher),
 		applyPassThroughStream(outbound, processor.SystemService),
 		persistRequest(inbound),
 	)

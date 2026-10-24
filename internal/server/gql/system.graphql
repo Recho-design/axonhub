@@ -125,6 +125,7 @@ type RetryPolicy {
   autoDisableChannel: AutoDisableChannel!
   emptyResponseDetection: Boolean!
   upstreamErrorPolicy: UpstreamErrorPolicy!
+  contentErrorDetection: ContentErrorDetection!
 }
 
 type UpstreamErrorPolicy {
@@ -135,6 +136,16 @@ type UpstreamErrorPolicy {
 input UpstreamErrorPolicyInput {
   mode: String
   customMessage: String
+}
+
+type ContentErrorDetection {
+  enabled: Boolean!
+  patterns: [RetryableErrorPattern!]!
+}
+
+input ContentErrorDetectionInput {
+  enabled: Boolean
+  patterns: [RetryableErrorPatternInput!]
 }
 
 input AutoDisableChannelInput {
@@ -154,6 +165,7 @@ input UpdateRetryPolicyInput {
   autoDisableChannel: AutoDisableChannelInput
   emptyResponseDetection: Boolean
   upstreamErrorPolicy: UpstreamErrorPolicyInput
+  contentErrorDetection: ContentErrorDetectionInput
 }
 
 enum TraceStickyMode {

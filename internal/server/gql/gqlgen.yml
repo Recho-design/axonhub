@@ -275,6 +275,12 @@ models:
   UpstreamErrorPolicyInput:
     model:
       - github.com/looplj/axonhub/internal/server/biz.UpstreamErrorPolicy
+  ContentErrorDetection:
+    model:
+      - github.com/looplj/axonhub/internal/server/biz.ContentErrorDetection
+  ContentErrorDetectionInput:
+    model:
+      - github.com/looplj/axonhub/internal/server/biz.ContentErrorDetection
   UpdateAPIKeyProfilesInput:
     model:
       - github.com/looplj/axonhub/internal/objects.APIKeyProfiles

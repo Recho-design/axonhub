@@ -741,10 +741,28 @@ func NormalizeRetryableErrorPatterns(settings *objects.ChannelSettings) error {
 		return nil
 	}
 
-	patterns := make([]objects.RetryableErrorPattern, 0, len(settings.RetryableErrorPatterns))
-	seen := make(map[string]struct{}, len(settings.RetryableErrorPatterns))
+	patterns, err := normalizeRetryableErrorPatterns(settings.RetryableErrorPatterns)
+	if err != nil {
+		return err
+	}
 
-	for _, pattern := range settings.RetryableErrorPatterns {
+	settings.RetryableErrorPatterns = patterns
+
+	return nil
+}
+
+// normalizeRetryableErrorPatterns validates, deduplicates, and trims a pattern
+// list. Channel retry rules and the global content error detection share it, so
+// both reject an invalid regular expression at save time.
+func normalizeRetryableErrorPatterns(retryablePatterns []objects.RetryableErrorPattern) ([]objects.RetryableErrorPattern, error) {
+	if len(retryablePatterns) == 0 {
+		return []objects.RetryableErrorPattern{}, nil
+	}
+
+	patterns := make([]objects.RetryableErrorPattern, 0, len(retryablePatterns))
+	seen := make(map[string]struct{}, len(retryablePatterns))
+
+	for _, pattern := range retryablePatterns {
 		pattern.Pattern = strings.TrimSpace(pattern.Pattern)
 		if pattern.Pattern == "" {
 			continue
@@ -752,7 +770,7 @@ func NormalizeRetryableErrorPatterns(settings *objects.ChannelSettings) error {
 
 		if pattern.Regex {
 			if _, err := regexp.Compile(pattern.Pattern); err != nil {
-				return fmt.Errorf("invalid retryable error regex %q: %w", pattern.Pattern, err)
+				return nil, fmt.Errorf("invalid retryable error regex %q: %w", pattern.Pattern, err)
 			}
 		}
 
@@ -765,9 +783,7 @@ func NormalizeRetryableErrorPatterns(settings *objects.ChannelSettings) error {
 		patterns = append(patterns, pattern)
 	}
 
-	settings.RetryableErrorPatterns = patterns
-
-	return nil
+	return patterns, nil
 }
 
 // NormalizeAPIKeyAutoDisableRules validates and canonicalizes channel-scoped

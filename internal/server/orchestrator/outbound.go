@@ -1030,6 +1030,17 @@ func (p *PersistentOutboundTransformer) CanRetry(err error) bool {
 		return true
 	}
 
+	// Content error detection: the upstream answered with HTTP 200 and put error
+	// text into the assistant content, so the same channel (or its next model) may
+	// still succeed.
+	if errors.Is(err, pipeline.ErrContentErrorMatch) {
+		log.Debug(context.Background(), "response content matched an error pattern",
+			log.Int("channel_id", p.state.CurrentCandidate.Channel.ID),
+		)
+
+		return true
+	}
+
 	// 429 Too Many Requests: always skip same-channel retry.
 	// The upstream is explicitly rate-limiting this channel, so retrying the same
 	// channel would just burn a retry attempt without any chance of success.

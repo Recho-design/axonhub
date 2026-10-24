@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -18,7 +19,8 @@ import {
   serializeApiKeyAutoDisableRules,
   toApiKeyAutoDisableRuleFormValues,
 } from '@/features/channels/data/auto-disable';
-import { useRetryPolicy, useUpdateRetryPolicy, type RetryPolicyInput } from '../data/system';
+import { useRetryPolicy, useUpdateRetryPolicy, type RetryPolicyInput, type RetryableErrorPattern } from '../data/system';
+import { ContentErrorDetectionEditor } from './content-error-detection-editor';
 
 export function RetrySettings() {
   const { t } = useTranslation();
@@ -43,6 +45,10 @@ export function RetrySettings() {
       enabled: false,
       rules: [],
     },
+    contentErrorDetection: {
+      enabled: false,
+      patterns: [],
+    },
   });
 
   useEffect(() => {
@@ -64,6 +70,13 @@ export function RetrySettings() {
         autoDisableChannel: {
           enabled: retryPolicy.autoDisableChannel?.enabled || false,
           rules: toApiKeyAutoDisableRuleFormValues(retryPolicy.autoDisableChannel?.rules),
+        },
+        contentErrorDetection: {
+          enabled: retryPolicy.contentErrorDetection?.enabled || false,
+          patterns: (retryPolicy.contentErrorDetection?.patterns || []).map((p) => ({
+            pattern: p.pattern,
+            regex: Boolean(p.regex),
+          })),
         },
       });
     }
@@ -121,18 +134,62 @@ export function RetrySettings() {
     }));
   }, []);
 
+  const handleContentErrorDetectionChange = useCallback((field: 'enabled', value: boolean) => {
+    setFormData((prev) => ({
+      ...prev,
+      contentErrorDetection: {
+        ...prev.contentErrorDetection,
+        [field]: value,
+      },
+    }));
+  }, []);
+
+  const handleContentErrorPatternsChange = useCallback((patterns: RetryableErrorPattern[]) => {
+    setFormData((prev) => ({
+      ...prev,
+      contentErrorDetection: {
+        ...prev.contentErrorDetection,
+        patterns,
+      },
+    }));
+  }, []);
+
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
+
+      if (formData.contentErrorDetection?.enabled) {
+        const patterns = formData.contentErrorDetection.patterns || [];
+        for (const item of patterns) {
+          if (item.regex && item.pattern.trim()) {
+            try {
+              new RegExp(item.pattern.trim());
+            } catch {
+              toast.error(t('system.retry.contentErrorDetection.patterns.hasInvalidRegex'));
+              return;
+            }
+          }
+        }
+      }
+
       await updateRetryPolicy.mutateAsync({
         ...formData,
         autoDisableChannel: {
           enabled: formData.autoDisableChannel?.enabled || false,
           rules: serializeApiKeyAutoDisableRules(toApiKeyAutoDisableRuleFormValues(formData.autoDisableChannel?.rules)),
         },
+        contentErrorDetection: {
+          enabled: formData.contentErrorDetection?.enabled || false,
+          patterns: (formData.contentErrorDetection?.patterns || [])
+            .map((p) => ({
+              pattern: p.pattern.trim(),
+              regex: Boolean(p.regex),
+            }))
+            .filter((p) => p.pattern !== ''),
+        },
       });
     },
-    [updateRetryPolicy, formData]
+    [updateRetryPolicy, formData, t]
   );
 
   if (isLoading) {
@@ -351,6 +408,34 @@ export function RetrySettings() {
                   checked={formData.emptyResponseDetection || false}
                   onCheckedChange={(checked) => handleInputChange('emptyResponseDetection', checked)}
                 />
+              </div>
+
+              <Separator />
+
+              {/* Content Error Detection */}
+              <div id='content-error-detection' className='space-y-4'>
+                <div className='flex items-center justify-between'>
+                  <div className='space-y-0.5'>
+                    <Label htmlFor='content-error-detection-enabled' className='text-base'>
+                      {t('system.retry.contentErrorDetection.label')}
+                    </Label>
+                    <div className='text-muted-foreground text-sm'>{t('system.retry.contentErrorDetection.description')}</div>
+                  </div>
+                  <Switch
+                    id='content-error-detection-enabled'
+                    checked={formData.contentErrorDetection?.enabled || false}
+                    onCheckedChange={(checked) => handleContentErrorDetectionChange('enabled', checked)}
+                  />
+                </div>
+
+                {formData.contentErrorDetection?.enabled && (
+                  <div className='space-y-4'>
+                    <ContentErrorDetectionEditor
+                      patterns={formData.contentErrorDetection?.patterns || []}
+                      onChange={handleContentErrorPatternsChange}
+                    />
+                  </div>
+                )}
               </div>
 
               <Separator />

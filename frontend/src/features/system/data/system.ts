@@ -119,6 +119,13 @@ const RETRY_POLICY_QUERY = `
           disableUntilTimezone
         }
       }
+      contentErrorDetection {
+        enabled
+        patterns {
+          pattern
+          regex
+        }
+      }
     }
   }
 `;
@@ -359,6 +366,22 @@ export interface RetryPolicy {
   autoDisableChannel: AutoDisableChannel;
   emptyResponseDetection: boolean;
   upstreamErrorPolicy: UpstreamErrorPolicy;
+  contentErrorDetection: ContentErrorDetection;
+}
+
+export interface ContentErrorDetection {
+  enabled: boolean;
+  patterns: RetryableErrorPattern[];
+}
+
+export interface ContentErrorDetectionInput {
+  enabled?: boolean;
+  patterns?: RetryableErrorPattern[];
+}
+
+export interface RetryableErrorPattern {
+  pattern: string;
+  regex: boolean;
 }
 
 export interface UpstreamErrorPolicy {
@@ -383,6 +406,7 @@ export interface RetryPolicyInput {
   autoDisableChannel?: AutoDisableChannelInput;
   emptyResponseDetection?: boolean;
   upstreamErrorPolicy?: Partial<UpstreamErrorPolicy>;
+  contentErrorDetection?: ContentErrorDetectionInput;
 }
 
 export type TraceStickyMode = 'DISABLED' | 'PREFER_PREVIOUS_CHANNEL';

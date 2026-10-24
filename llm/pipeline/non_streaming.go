@@ -60,6 +60,22 @@ func (p *pipeline) notStream(
 		return nil, ErrEmptyResponse
 	}
 
+	// Some providers answer with HTTP 200 and put the upstream error text into the
+	// assistant content. Such a response must not reach the caller: fail the
+	// attempt so the retry flow can try another channel or model.
+	if match := p.contentErrorMatcher.DetectContentError(llmResp); match != nil {
+		slog.WarnContext(ctx, "non-streaming response content matched an error pattern",
+			slog.String("pattern", match.Pattern),
+			slog.Bool("regex", match.Regex),
+			slog.String("content_preview", match.ContentPreview()),
+		)
+
+		err := WrapContentErrorMatch(match)
+		p.applyRawErrorResponseMiddlewares(ctx, err)
+
+		return nil, err
+	}
+
 	slog.DebugContext(ctx, "LLM response", slog.Any("response", llmResp))
 
 	llmResp = withTransformerMetadata(request.TransformerMetadata, llmResp)

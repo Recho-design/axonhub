@@ -659,6 +659,11 @@ type ComplexityRoot struct {
 		AuthCookie func(childComplexity int) int
 	}
 
+	ContentErrorDetection struct {
+		Enabled  func(childComplexity int) int
+		Patterns func(childComplexity int) int
+	}
+
 	CostItem struct {
 		ItemCode      func(childComplexity int) int
 		Quantity      func(childComplexity int) int
@@ -1650,6 +1655,7 @@ type ComplexityRoot struct {
 
 	RetryPolicy struct {
 		AutoDisableChannel              func(childComplexity int) int
+		ContentErrorDetection           func(childComplexity int) int
 		EmptyResponseDetection          func(childComplexity int) int
 		Enabled                         func(childComplexity int) int
 		LoadBalancerStrategy            func(childComplexity int) int
@@ -4777,6 +4783,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.CommandCodeQuotaSettings.AuthCookie(childComplexity), true
+
+	case "ContentErrorDetection.enabled":
+		if e.complexity.ContentErrorDetection.Enabled == nil {
+			break
+		}
+
+		return e.complexity.ContentErrorDetection.Enabled(childComplexity), true
+	case "ContentErrorDetection.patterns":
+		if e.complexity.ContentErrorDetection.Patterns == nil {
+			break
+		}
+
+		return e.complexity.ContentErrorDetection.Patterns(childComplexity), true
 
 	case "CostItem.itemCode":
 		if e.complexity.CostItem.ItemCode == nil {
@@ -9854,6 +9873,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.RetryPolicy.AutoDisableChannel(childComplexity), true
+	case "RetryPolicy.contentErrorDetection":
+		if e.complexity.RetryPolicy.ContentErrorDetection == nil {
+			break
+		}
+
+		return e.complexity.RetryPolicy.ContentErrorDetection(childComplexity), true
 	case "RetryPolicy.emptyResponseDetection":
 		if e.complexity.RetryPolicy.EmptyResponseDetection == nil {
 			break
@@ -12087,6 +12112,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCompleteAutoDisableChannelOnboardingInput,
 		ec.unmarshalInputCompleteOnboardingInput,
 		ec.unmarshalInputCompleteSystemModelSettingOnboardingInput,
+		ec.unmarshalInputContentErrorDetectionInput,
 		ec.unmarshalInputCostItemInput,
 		ec.unmarshalInputCountChannelsByTypeInput,
 		ec.unmarshalInputCreateAPIKeyInput,
@@ -27353,6 +27379,70 @@ func (ec *executionContext) fieldContext_CommandCodeQuotaSettings_authCookie(_ c
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ContentErrorDetection_enabled(ctx context.Context, field graphql.CollectedField, obj *biz.ContentErrorDetection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ContentErrorDetection_enabled,
+		func(ctx context.Context) (any, error) {
+			return obj.Enabled, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ContentErrorDetection_enabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ContentErrorDetection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ContentErrorDetection_patterns(ctx context.Context, field graphql.CollectedField, obj *biz.ContentErrorDetection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ContentErrorDetection_patterns,
+		func(ctx context.Context) (any, error) {
+			return obj.Patterns, nil
+		},
+		nil,
+		ec.marshalNRetryableErrorPattern2ᚕgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐRetryableErrorPatternᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ContentErrorDetection_patterns(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ContentErrorDetection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "pattern":
+				return ec.fieldContext_RetryableErrorPattern_pattern(ctx, field)
+			case "regex":
+				return ec.fieldContext_RetryableErrorPattern_regex(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type RetryableErrorPattern", field.Name)
 		},
 	}
 	return fc, nil
@@ -48400,6 +48490,8 @@ func (ec *executionContext) fieldContext_Query_retryPolicy(_ context.Context, fi
 				return ec.fieldContext_RetryPolicy_emptyResponseDetection(ctx, field)
 			case "upstreamErrorPolicy":
 				return ec.fieldContext_RetryPolicy_upstreamErrorPolicy(ctx, field)
+			case "contentErrorDetection":
+				return ec.fieldContext_RetryPolicy_contentErrorDetection(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type RetryPolicy", field.Name)
 		},
@@ -53452,6 +53544,41 @@ func (ec *executionContext) fieldContext_RetryPolicy_upstreamErrorPolicy(_ conte
 				return ec.fieldContext_UpstreamErrorPolicy_customMessage(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type UpstreamErrorPolicy", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RetryPolicy_contentErrorDetection(ctx context.Context, field graphql.CollectedField, obj *biz.RetryPolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RetryPolicy_contentErrorDetection,
+		func(ctx context.Context) (any, error) {
+			return obj.ContentErrorDetection, nil
+		},
+		nil,
+		ec.marshalNContentErrorDetection2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐContentErrorDetection,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RetryPolicy_contentErrorDetection(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RetryPolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "enabled":
+				return ec.fieldContext_ContentErrorDetection_enabled(ctx, field)
+			case "patterns":
+				return ec.fieldContext_ContentErrorDetection_patterns(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ContentErrorDetection", field.Name)
 		},
 	}
 	return fc, nil
@@ -72418,6 +72545,40 @@ func (ec *executionContext) unmarshalInputCompleteSystemModelSettingOnboardingIn
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputContentErrorDetectionInput(ctx context.Context, obj any) (biz.ContentErrorDetection, error) {
+	var it biz.ContentErrorDetection
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"enabled", "patterns"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "enabled":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("enabled"))
+			data, err := ec.unmarshalOBoolean2bool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Enabled = data
+		case "patterns":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("patterns"))
+			data, err := ec.unmarshalORetryableErrorPatternInput2ᚕgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐRetryableErrorPatternᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Patterns = data
+		}
+	}
+
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputCostItemInput(ctx context.Context, obj any) (objects.CostItem, error) {
 	var it objects.CostItem
 	asMap := map[string]any{}
@@ -88749,7 +88910,7 @@ func (ec *executionContext) unmarshalInputUpdateRetryPolicyInput(ctx context.Con
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"maxChannelRetries", "maxSingleChannelRetries", "retryDelayMs", "streamFirstEventTimeoutSeconds", "nonStreamResponseTimeoutSeconds", "loadBalancerStrategy", "traceStickyMode", "enabled", "autoDisableChannel", "emptyResponseDetection", "upstreamErrorPolicy"}
+	fieldsInOrder := [...]string{"maxChannelRetries", "maxSingleChannelRetries", "retryDelayMs", "streamFirstEventTimeoutSeconds", "nonStreamResponseTimeoutSeconds", "loadBalancerStrategy", "traceStickyMode", "enabled", "autoDisableChannel", "emptyResponseDetection", "upstreamErrorPolicy", "contentErrorDetection"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -88833,6 +88994,13 @@ func (ec *executionContext) unmarshalInputUpdateRetryPolicyInput(ctx context.Con
 				return it, err
 			}
 			it.UpstreamErrorPolicy = data
+		case "contentErrorDetection":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("contentErrorDetection"))
+			data, err := ec.unmarshalOContentErrorDetectionInput2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐContentErrorDetection(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ContentErrorDetection = data
 		}
 	}
 
@@ -98454,6 +98622,50 @@ func (ec *executionContext) _CommandCodeQuotaSettings(ctx context.Context, sel a
 			out.Values[i] = graphql.MarshalString("CommandCodeQuotaSettings")
 		case "authCookie":
 			out.Values[i] = ec._CommandCodeQuotaSettings_authCookie(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var contentErrorDetectionImplementors = []string{"ContentErrorDetection"}
+
+func (ec *executionContext) _ContentErrorDetection(ctx context.Context, sel ast.SelectionSet, obj *biz.ContentErrorDetection) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, contentErrorDetectionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ContentErrorDetection")
+		case "enabled":
+			out.Values[i] = ec._ContentErrorDetection_enabled(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "patterns":
+			out.Values[i] = ec._ContentErrorDetection_patterns(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -108482,6 +108694,11 @@ func (ec *executionContext) _RetryPolicy(ctx context.Context, sel ast.SelectionS
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "contentErrorDetection":
+			out.Values[i] = ec._RetryPolicy_contentErrorDetection(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -116109,6 +116326,10 @@ func (ec *executionContext) unmarshalNCompleteSystemModelSettingOnboardingInput2
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
+func (ec *executionContext) marshalNContentErrorDetection2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐContentErrorDetection(ctx context.Context, sel ast.SelectionSet, v biz.ContentErrorDetection) graphql.Marshaler {
+	return ec._ContentErrorDetection(ctx, sel, &v)
+}
+
 func (ec *executionContext) marshalNCostItem2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐCostItem(ctx context.Context, sel ast.SelectionSet, v objects.CostItem) graphql.Marshaler {
 	return ec._CostItem(ctx, sel, &v)
 }
@@ -119252,6 +119473,50 @@ func (ec *executionContext) marshalNRetryPolicy2ᚖgithubᚗcomᚋloopljᚋaxonh
 
 func (ec *executionContext) marshalNRetryableErrorPattern2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐRetryableErrorPattern(ctx context.Context, sel ast.SelectionSet, v objects.RetryableErrorPattern) graphql.Marshaler {
 	return ec._RetryableErrorPattern(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNRetryableErrorPattern2ᚕgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐRetryableErrorPatternᚄ(ctx context.Context, sel ast.SelectionSet, v []objects.RetryableErrorPattern) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNRetryableErrorPattern2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐRetryableErrorPattern(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) unmarshalNRetryableErrorPatternInput2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐRetryableErrorPattern(ctx context.Context, v any) (objects.RetryableErrorPattern, error) {
@@ -122777,6 +123042,11 @@ func (ec *executionContext) unmarshalOCommandCodeQuotaSettingsInput2ᚖgithubᚗ
 	}
 	res, err := ec.unmarshalInputCommandCodeQuotaSettingsInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOContentErrorDetectionInput2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐContentErrorDetection(ctx context.Context, v any) (biz.ContentErrorDetection, error) {
+	res, err := ec.unmarshalInputContentErrorDetectionInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalOCostItem2ᚕgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐCostItemᚄ(ctx context.Context, sel ast.SelectionSet, v []objects.CostItem) graphql.Marshaler {

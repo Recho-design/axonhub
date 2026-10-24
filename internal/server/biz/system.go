@@ -330,6 +330,25 @@ type RetryPolicy struct {
 
 	// UpstreamErrorPolicy controls how provider errors are exposed to API users.
 	UpstreamErrorPolicy UpstreamErrorPolicy `json:"upstream_error_policy"`
+
+	// ContentErrorDetection detects upstream error text returned as assistant
+	// content in a successful non-streaming response. A match discards the
+	// response and fails the attempt, so the retry policy can try again.
+	ContentErrorDetection ContentErrorDetection `json:"content_error_detection"`
+}
+
+// ContentErrorDetection configures non-streaming response content error
+// detection. Some providers answer with HTTP 200 and put the upstream error text
+// into the assistant content, which the status-code and error-text retry rules
+// cannot see.
+type ContentErrorDetection struct {
+	// Enabled controls whether the detection runs.
+	Enabled bool `json:"enabled"`
+
+	// Patterns are the matchers evaluated against the assistant message content.
+	// They share the channel retryable error pattern semantics: a non-regex
+	// pattern is a case-sensitive substring, a regex pattern is compiled once.
+	Patterns []objects.RetryableErrorPattern `json:"patterns"`
 }
 
 type TraceStickyMode string
@@ -1092,6 +1111,12 @@ func (s *SystemService) SetRetryPolicy(ctx context.Context, policy *RetryPolicy)
 	}
 	policy.AutoDisableChannel.Rules = rules
 
+	patterns, err := normalizeRetryableErrorPatterns(policy.ContentErrorDetection.Patterns)
+	if err != nil {
+		return xerrors.ValidationError(err.Error())
+	}
+	policy.ContentErrorDetection.Patterns = patterns
+
 	jsonBytes, err := json.Marshal(policy)
 	if err != nil {
 		return fmt.Errorf("failed to marshal retry policy: %w", err)
@@ -1168,6 +1193,10 @@ func normalizeRetryPolicy(policy *RetryPolicy) {
 	if policy.UpstreamErrorPolicy.Mode == UpstreamErrorModeCustom &&
 		strings.TrimSpace(policy.UpstreamErrorPolicy.CustomMessage) == "" {
 		policy.UpstreamErrorPolicy.Mode = UpstreamErrorModeHidden
+	}
+
+	if policy.ContentErrorDetection.Patterns == nil {
+		policy.ContentErrorDetection.Patterns = []objects.RetryableErrorPattern{}
 	}
 }
 
