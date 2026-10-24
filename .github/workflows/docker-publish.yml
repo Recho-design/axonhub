@@ -19,6 +19,7 @@ jobs:
       mode: release
       ref: ${{ github.sha }}
       tag: ${{ github.ref_name }}
+    secrets: inherit
     permissions:
       contents: read
       packages: write

@@ -51,6 +51,7 @@ jobs:
       ref: ${{ needs.prepare.outputs.commit_sha }}
       base_version: ${{ needs.prepare.outputs.base_version }}
       build_date: ${{ needs.prepare.outputs.build_date }}
+    secrets: inherit
     permissions:
       contents: read
       packages: write
