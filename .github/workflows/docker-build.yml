@@ -83,7 +83,10 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ github.token }}
+          # The built-in github.token cannot access user-namespace GHCR packages
+          # from this forked repository (installation-level restriction), so CI
+          # authenticates with the stored PAT instead.
+          password: ${{ secrets.GHCR_PAT }}
 
       - name: Extract metadata (labels)
         id: meta
