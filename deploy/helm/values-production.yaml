@@ -12,7 +12,7 @@ axonhub:
   replicaCount: 2
   
   image:
-    repository: looplj/axonhub
+    repository: ghcr.io/recho-design/axonhub
     # Overrides the image tag. Defaults to the chart appVersion when empty.
     tag: ""
     pullPolicy: IfNotPresent

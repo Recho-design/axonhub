@@ -54,29 +54,27 @@ jobs:
     permissions:
       contents: read
       packages: write
-    secrets:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
   create_manifests:
-    name: Create multi-arch manifest (Docker Hub)
+    name: Create multi-arch manifest (GHCR)
     needs: [prepare, build_single_arch]
     runs-on: ubuntu-latest
     steps:
-      - name: Log in to Docker Hub
+      - name: Log in to GHCR
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
       - name: Create & push manifest (Docker Hub - unstable)
         run: |
           DATE=${{ needs.prepare.outputs.build_date }}
           docker buildx imagetools create \
-            -t looplj/axonhub:unstable \
-            looplj/axonhub:unstable-amd64 \
-            looplj/axonhub:unstable-arm64
+            -t ghcr.io/recho-design/axonhub:unstable \
+            ghcr.io/recho-design/axonhub:unstable-amd64 \
+            ghcr.io/recho-design/axonhub:unstable-arm64
           docker buildx imagetools create \
-            -t looplj/axonhub:unstable-${DATE} \
-            looplj/axonhub:unstable-${DATE}-amd64 \
-            looplj/axonhub:unstable-${DATE}-arm64
+            -t ghcr.io/recho-design/axonhub:unstable-${DATE} \
+            ghcr.io/recho-design/axonhub:unstable-${DATE}-amd64 \
+            ghcr.io/recho-design/axonhub:unstable-${DATE}-arm64

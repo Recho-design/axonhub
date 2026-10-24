@@ -11,14 +11,14 @@ permissions:
 
 jobs:
   helm-chart:
-    if: github.repository_owner == 'looplj'
+    if: github.repository_owner == 'Recho-design'
     runs-on: ubuntu-latest
     concurrency:
       group: release-helm-chart-${{ github.ref }}
       cancel-in-progress: false
     env:
       CHART_DIR: deploy/helm
-      OCI_REGISTRY: oci://ghcr.io/${{ github.repository_owner }}/charts
+      OCI_REGISTRY: oci://ghcr.io/recho-design/charts
 
     steps:
       - name: Checkout

@@ -2,9 +2,8 @@
 # Used by docker-publish.yml (mode: release), docker-unstable.yml
 # (mode: unstable), and docker-pr.yml (mode: test).
 # Owns the native-architecture matrix, checkout, VERSION materialization,
-# Docker Buildx setup, optional Docker Hub login/metadata, mode-specific tags,
-# and the single build-push step. Callers pass credentials explicitly and
-# keep their own manifest jobs.
+# Docker Buildx setup, GHCR login/metadata, mode-specific tags, and the single
+# build-push step. Callers grant packages:write and keep their own manifest jobs.
 
 name: Docker build (shared)
 
@@ -34,12 +33,6 @@ on:
         description: 'Build date (mode: unstable)'
         required: false
         type: string
-    secrets:
-      DOCKERHUB_USERNAME:
-        required: false
-      DOCKERHUB_TOKEN:
-        required: false
-
 jobs:
   build:
     name: Docker build (${{ matrix.arch }}) [native]
@@ -84,12 +77,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Log in to Docker Hub
+      - name: Log in to GHCR
         if: inputs.mode != 'test'
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
       - name: Extract metadata (labels)
         id: meta
@@ -97,7 +91,7 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: |
-            looplj/axonhub
+            ghcr.io/recho-design/axonhub
 
       - name: Resolve image tags
         id: tags
@@ -111,13 +105,13 @@ jobs:
           case "$MODE" in
             release)
               printf -v TAGS '%s\n%s' \
-                "looplj/axonhub:${TAG}-${ARCH}" \
-                "looplj/axonhub:latest-${ARCH}"
+                "ghcr.io/recho-design/axonhub:${TAG}-${ARCH}" \
+                "ghcr.io/recho-design/axonhub:latest-${ARCH}"
               ;;
             unstable)
               printf -v TAGS '%s\n%s' \
-                "looplj/axonhub:unstable-${ARCH}" \
-                "looplj/axonhub:unstable-${BUILD_DATE}-${ARCH}"
+                "ghcr.io/recho-design/axonhub:unstable-${ARCH}" \
+                "ghcr.io/recho-design/axonhub:unstable-${BUILD_DATE}-${ARCH}"
               ;;
             *)
               echo "Unknown mode: $MODE" >&2
