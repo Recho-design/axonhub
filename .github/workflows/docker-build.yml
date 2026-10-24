@@ -38,14 +38,12 @@ jobs:
     name: Docker build (${{ matrix.arch }}) [native]
     strategy:
       fail-fast: false
+      # amd64-only: 部署目标均为 x86_64，去掉 arm64 以节省构建资源。
       matrix:
         include:
           - arch: amd64
             platform: linux/amd64
             runner: ubuntu-latest
-          - arch: arm64
-            platform: linux/arm64
-            runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read

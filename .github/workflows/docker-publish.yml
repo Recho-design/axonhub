@@ -46,12 +46,10 @@ jobs:
         run: |
           docker buildx imagetools create \
             -t ghcr.io/recho-design/axonhub:${TAG} \
-            ghcr.io/recho-design/axonhub:${TAG}-amd64 \
-            ghcr.io/recho-design/axonhub:${TAG}-arm64
+            ghcr.io/recho-design/axonhub:${TAG}-amd64
 
       - name: Create & push manifest (Docker Hub - latest)
         run: |
           docker buildx imagetools create \
             -t ghcr.io/recho-design/axonhub:latest \
-            ghcr.io/recho-design/axonhub:latest-amd64 \
-            ghcr.io/recho-design/axonhub:latest-arm64
+            ghcr.io/recho-design/axonhub:latest-amd64
