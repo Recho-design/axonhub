@@ -222,6 +222,8 @@ func validateFilterLeaf(condition objects.Condition) error {
 		objects.ModelAssociationConditionFieldHasDocument,
 		objects.ModelAssociationConditionFieldHasAudio:
 		return validateBoolEqualityLeaf(condition, condition.Field)
+	case objects.ModelAssociationConditionFieldMessagesText:
+		return validateMessagesTextLeaf(condition)
 	default:
 		return fmt.Errorf("unsupported condition field %q", condition.Field)
 	}
@@ -320,6 +322,29 @@ func validateRequestHeaderLeaf(condition objects.Condition) error {
 	value, ok := condition.Value.(string)
 	if !ok || value == "" {
 		return fmt.Errorf("condition value for request_header must be a non-empty string")
+	}
+
+	return nil
+}
+
+// validateMessagesTextLeaf validates a messages_text condition: only the regex
+// and not_regex operators are supported, the value must be a non-empty pattern,
+// and the pattern must compile so a broken rule is rejected at save time
+// instead of silently matching nothing at request time.
+func validateMessagesTextLeaf(condition objects.Condition) error {
+	switch strings.TrimSpace(strings.ToLower(condition.Operator)) {
+	case "regex", "not_regex":
+	default:
+		return fmt.Errorf("unsupported condition operator %q for %s", condition.Operator, objects.ModelAssociationConditionFieldMessagesText)
+	}
+
+	value, ok := condition.Value.(string)
+	if !ok || value == "" {
+		return fmt.Errorf("condition value for %s must be a non-empty string", objects.ModelAssociationConditionFieldMessagesText)
+	}
+
+	if err := xregexp.ValidateSearchRegex(value); err != nil {
+		return fmt.Errorf("invalid regex pattern in %s condition: %w", objects.ModelAssociationConditionFieldMessagesText, err)
 	}
 
 	return nil

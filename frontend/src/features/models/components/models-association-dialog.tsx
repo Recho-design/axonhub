@@ -136,6 +136,13 @@ const whenFilterFields: FilterBuilderField[] = [
     ],
   },
   {
+    value: 'messages_text',
+    label: 'Message text',
+    type: 'string',
+    placeholder: 'Enter regex pattern',
+    operators: [{ value: 'regex', label: 'Matches regex' }],
+  },
+  {
     value: 'request_header',
     label: 'Request header',
     type: 'string',
@@ -309,13 +316,34 @@ function validateWhenConditionNode(
     });
   }
   if (
-    (condition.field === 'request_format' || condition.field === 'reasoning_effort' || condition.field === 'daily_time') &&
+    (condition.field === 'request_format' ||
+      condition.field === 'reasoning_effort' ||
+      condition.field === 'daily_time' ||
+      condition.field === 'messages_text') &&
     typeof condition.value !== 'string'
   ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'Value must be text',
       path: [...path, 'value'],
+    });
+  }
+  if (condition.field === 'messages_text' && typeof condition.value === 'string' && condition.value !== '') {
+    try {
+      new RegExp(condition.value);
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Invalid regular expression',
+        path: [...path, 'value'],
+      });
+    }
+  }
+  if (condition.field && condition.operator && !isValidConditionOperator(condition.field, condition.operator)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Invalid operator for field',
+      path: [...path, 'operator'],
     });
   }
   if (condition.field === 'daily_time' && (typeof condition.value !== 'string' || !dailyTimeRangePattern.test(condition.value))) {
@@ -1714,7 +1742,10 @@ function AssociationRow({ index, form, isDeveloperMode, channelOptions, allModel
                         { value: 'or', label: t('models.dialogs.association.conditions.or') },
                       ]}
                       value={field.value || DEFAULT_WHEN_CONDITION}
-                      onChange={field.onChange}
+                      onChange={(nextVal) => {
+                        field.onChange(nextVal);
+                        void form.trigger(`associations.${index}.whenCondition`);
+                      }}
                       disabled={!whenEnabled}
                       allowNestedGroups={false}
                       maxDepth={MAX_WHEN_CONDITION_DEPTH}
@@ -1742,6 +1773,7 @@ function AssociationRow({ index, form, isDeveloperMode, channelOptions, allModel
                       fieldLabel={t('models.dialogs.association.conditions.fieldLabel')}
                       operatorLabel={t('models.dialogs.association.conditions.operatorLabel')}
                       valueLabel={t('models.dialogs.association.conditions.valueLabel')}
+                      invalidRegexLabel={t('models.dialogs.association.conditions.invalidRegex')}
                       addLabel={t('models.dialogs.association.conditions.add')}
                       addGroupLabel={t('prompts.conditions.addGroup')}
                       maxConditionsPerGroup={5}

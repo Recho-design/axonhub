@@ -12,6 +12,7 @@ import (
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/vm"
 
+	"github.com/looplj/axonhub/internal/pkg/xregexp"
 	"github.com/looplj/axonhub/internal/pkg/xtime"
 )
 
@@ -71,13 +72,34 @@ var dailyTimeWithinFunction = expr.Function(
 	},
 )
 
+var regexSearchFunction = expr.Function(
+	"regexSearch",
+	func(params ...any) (any, error) {
+		if len(params) != 2 {
+			return false, nil
+		}
+
+		text, ok := params[0].(string)
+		if !ok {
+			return false, nil
+		}
+
+		pattern, ok := params[1].(string)
+		if !ok {
+			return false, nil
+		}
+
+		return xregexp.SearchString(pattern, text), nil
+	},
+)
+
 //nolint:forcetypeassert // Checked.
 func compileCondition(expression string) (*vm.Program, error) {
 	if cached, ok := compiledConditionCache.Load(expression); ok {
 		return cached.(*vm.Program), nil
 	}
 
-	program, err := expr.Compile(expression, expr.AsBool(), dailyTimeWithinFunction)
+	program, err := expr.Compile(expression, expr.AsBool(), dailyTimeWithinFunction, regexSearchFunction)
 	if err != nil {
 		return nil, err
 	}
@@ -179,6 +201,10 @@ func conditionToExpr(condition Condition) (string, error) {
 		}
 	}
 
+	if field == ModelAssociationConditionFieldMessagesText {
+		return messagesTextToExpr(condition)
+	}
+
 	if strings.HasPrefix(field, ModelAssociationConditionFieldRequestHeaderPrefix) {
 		return requestHeaderToExpr(condition, field)
 	}
@@ -245,6 +271,40 @@ func requestHeaderToExpr(condition Condition, field string) (string, error) {
 		return access + " endsWith " + valueExpr, nil
 	default:
 		return "", fmt.Errorf("unsupported operator %q for request_header", condition.Operator)
+	}
+}
+
+/**
+ * messagesTextToExpr converts a messages_text regex condition into an expr
+ * expression. Matching uses non-anchored search semantics, so a pattern hits as
+ * soon as it appears anywhere in the concatenated message text.
+ *
+ * The pattern is embedded as an expr string literal, so an invalid regex fails
+ * here and Evaluate returns false. A half-valid condition can therefore never
+ * turn not_regex into "match everything".
+ */
+func messagesTextToExpr(condition Condition) (string, error) {
+	pattern, ok := condition.Value.(string)
+	if !ok || pattern == "" {
+		return "", fmt.Errorf("condition value for %s must be a non-empty string", ModelAssociationConditionFieldMessagesText)
+	}
+
+	if err := xregexp.ValidateSearchRegex(pattern); err != nil {
+		return "", err
+	}
+
+	valueExpr, err := literalExpr(pattern)
+	if err != nil {
+		return "", err
+	}
+
+	switch strings.TrimSpace(strings.ToLower(condition.Operator)) {
+	case "regex":
+		return "regexSearch(" + ModelAssociationConditionFieldMessagesText + ", " + valueExpr + ")", nil
+	case "not_regex":
+		return "!regexSearch(" + ModelAssociationConditionFieldMessagesText + ", " + valueExpr + ")", nil
+	default:
+		return "", fmt.Errorf("unsupported operator %q for %s", condition.Operator, ModelAssociationConditionFieldMessagesText)
 	}
 }
 

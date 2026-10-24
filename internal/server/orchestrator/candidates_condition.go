@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/samber/lo"
 
@@ -41,6 +43,7 @@ func filterResolvedCandidatesForRequest(
 	reasoningEffort := reqReasoningEffort(req)
 	contentFeatures := detectRequestContentFeatures(req)
 	requestHeaders := buildRequestHeaderMap(req)
+	messagesText := extractRequestMessagesText(req)
 	now := time.Now()
 	filtered := make([]*resolvedAssociationCandidate, 0, len(resolvedCandidates))
 
@@ -49,7 +52,7 @@ func filterResolvedCandidatesForRequest(
 			continue
 		}
 
-		if !matchesAssociationWhen(promptTokens, stream, requestFormat, reasoningEffort, contentFeatures, requestHeaders, now, candidate.when) {
+		if !matchesAssociationWhen(promptTokens, stream, requestFormat, reasoningEffort, contentFeatures, requestHeaders, messagesText, now, candidate.when) {
 			continue
 		}
 
@@ -163,6 +166,7 @@ func matchesAssociationWhen(
 	reasoningEffort string,
 	contentFeatures requestContentFeatures,
 	requestHeaders map[string]string,
+	messagesText string,
 	now time.Time,
 	when *objects.ModelAssociationWhen,
 ) bool {
@@ -184,6 +188,7 @@ func matchesAssociationWhen(
 		objects.ModelAssociationConditionFieldHasDocument:     contentFeatures.hasDocument,
 		objects.ModelAssociationConditionFieldHasAudio:        contentFeatures.hasAudio,
 		objects.ModelAssociationConditionFieldRequestHeader:   requestHeaders,
+		objects.ModelAssociationConditionFieldMessagesText:    messagesText,
 		"now": now,
 	}) {
 		return false
@@ -222,6 +227,119 @@ func detectRequestContentFeatures(req *llm.Request) requestContentFeatures {
 
 func (features requestContentFeatures) hasAll() bool {
 	return features.hasImage && features.hasVideo && features.hasDocument && features.hasAudio
+}
+
+// requestMessagesTextMaxBytes caps the concatenated message text exposed to
+// `messages_text` conditions. A single request can carry megabytes of text, and
+// every conditional association runs a user supplied regex against this string,
+// so the cap bounds the cost per request. 1 MiB covers a full conversation
+// (roughly 350k Chinese characters) beyond most model context limits, and a
+// well-behaved pattern still matches it in milliseconds. Text beyond the cap
+// is ignored, so a pattern only matching the discarded tail will not hit.
+const requestMessagesTextMaxBytes = 1024 * 1024
+
+/**
+ * extractRequestMessagesText concatenates the text content of all request
+ * messages for the `messages_text` condition. Only text is collected: a plain
+ * string content, or the `text` parts of a multi-part content array. Image,
+ * audio, video and document payloads are skipped, so base64 data never reaches
+ * the regex. Tool calls and reasoning content are skipped as well, since they
+ * are model-generated data rather than the request prompt; the text of `tool`
+ * role messages is included because it is ordinary message content.
+ *
+ * Messages are joined with a newline to keep the boundary between two messages
+ * from forming an accidental match, and the result is capped at
+ * requestMessagesTextMaxBytes.
+ */
+func extractRequestMessagesText(req *llm.Request) string {
+	if req == nil || len(req.Messages) == 0 {
+		return ""
+	}
+
+	var builder strings.Builder
+
+	for _, message := range req.Messages {
+		appendMessageText(&builder, message.Content)
+		if builder.Len() >= requestMessagesTextMaxBytes {
+			break
+		}
+	}
+
+	return builder.String()
+}
+
+/**
+ * appendMessageText appends the text of one message content to builder, stopping
+ * at the shared byte budget. Content and MultipleContent are mutually exclusive
+ * representations of the same payload, and llm.MessageContent marshals
+ * MultipleContent when both are set; the same precedence is used here so the
+ * matched text matches what is actually sent upstream.
+ */
+func appendMessageText(builder *strings.Builder, content llm.MessageContent) {
+	if len(content.MultipleContent) == 0 {
+		if content.Content != nil {
+			appendTextWithinBudget(builder, *content.Content)
+		}
+
+		return
+	}
+
+	for _, part := range content.MultipleContent {
+		// Only text parts are prompt text; the other part types carry media.
+		if !strings.EqualFold(part.Type, "text") || part.Text == nil {
+			continue
+		}
+
+		appendTextWithinBudget(builder, *part.Text)
+	}
+}
+
+/**
+ * appendTextWithinBudget appends text plus a separating newline to builder,
+ * truncating to keep the total within requestMessagesTextMaxBytes.
+ */
+func appendTextWithinBudget(builder *strings.Builder, text string) {
+	if text == "" {
+		return
+	}
+
+	remaining := requestMessagesTextMaxBytes - builder.Len()
+
+	if builder.Len() > 0 {
+		// Reserve one byte for the separator written below.
+		remaining--
+		if remaining <= 0 {
+			return
+		}
+
+		builder.WriteByte('\n')
+	}
+
+	if len(text) > remaining {
+		text = truncateAtRuneBoundary(text, remaining)
+	}
+
+	builder.WriteString(text)
+}
+
+/**
+ * truncateAtRuneBoundary cuts text to at most limit bytes without splitting a
+ * multi-byte rune, so the matched text stays valid UTF-8.
+ */
+func truncateAtRuneBoundary(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+
+	if limit <= 0 {
+		return ""
+	}
+
+	for limit > 0 && !utf8.RuneStart(text[limit]) {
+		limit--
+	}
+
+	return text[:limit]
 }
 
 func estimatePromptTokens(req *llm.Request) int64 {

@@ -61,6 +61,7 @@ type FilterBuilderProps = {
   allowNestedGroups?: boolean;
   groupJoinLabel?: string;
   singleGroup?: boolean;
+  invalidRegexLabel?: string;
 };
 
 const defaultOperatorsByType: Record<FilterBuilderFieldType, FilterBuilderOperator[]> = {
@@ -230,6 +231,7 @@ type GroupEditorProps = {
   onRemove?: () => void;
   operatorLabel: string;
   valueLabel: string;
+  invalidRegexLabel?: string;
 };
 
 function GroupEditor({
@@ -250,6 +252,7 @@ function GroupEditor({
   onRemove,
   operatorLabel,
   valueLabel,
+  invalidRegexLabel,
 }: GroupEditorProps) {
   const conditions = group.conditions || [];
   const selectedLogicLabel =
@@ -357,6 +360,7 @@ function GroupEditor({
                     onRemove={() => updateConditions(conditions.filter((_, itemIndex) => itemIndex !== index))}
                     operatorLabel={operatorLabel}
                     valueLabel={valueLabel}
+                    invalidRegexLabel={invalidRegexLabel}
                   />
                 </div>
               </div>
@@ -435,7 +439,10 @@ function GroupEditor({
               ) : null}
             </>
           ) : null;
-          const operatorSelect = (
+          // A field with exactly one operator (e.g. messages_text with regex)
+          // renders no operator selector; the operator is implied.
+          const hasSingleOperator = operators.length === 1 && condition.operator === operators[0].value;
+          const operatorSelect = hasSingleOperator ? null : (
             <Select
               value={condition.operator}
               onValueChange={(operator) =>
@@ -455,6 +462,15 @@ function GroupEditor({
               </SelectContent>
             </Select>
           );
+          const isRegexOperator = condition.operator === 'regex' || condition.operator === 'not_regex';
+          let regexError: string | null = null;
+          if (isRegexOperator && typeof condition.value === 'string' && condition.value.length > 0) {
+            try {
+              new RegExp(condition.value);
+            } catch (err: unknown) {
+              regexError = invalidRegexLabel || (err instanceof Error ? err.message : 'Invalid regular expression');
+            }
+          }
           const valueControl =
             field.type === 'boolean' ? (
               <Select
@@ -499,6 +515,7 @@ function GroupEditor({
                 disabled={disabled}
                 aria-label={valueLabel}
                 placeholder={field.placeholder}
+                aria-invalid={Boolean(regexError)}
                 onChange={(e) =>
                   updateConditions(
                     conditions.map((item, itemIndex) =>
@@ -514,6 +531,14 @@ function GroupEditor({
                 className='h-10 min-w-0 text-xs'
               />
             );
+          const wrappedValueControl = (
+            <div className='flex flex-col min-w-0 w-full'>
+              {valueControl}
+              {regexError ? (
+                <span className='text-[11px] text-destructive mt-1 leading-tight'>{regexError}</span>
+              ) : null}
+            </div>
+          );
           const removeButton = (
             <Button
               type='button'
@@ -544,17 +569,29 @@ function GroupEditor({
               {field.subField ? (
                 <div className='space-y-2'>
                   <div className='grid grid-cols-1 gap-2 sm:grid-cols-2'>{fieldSelect}{subFieldInput}</div>
-                  <div className='grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.25fr)_2.5rem] gap-2 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_2.5rem] sm:items-center'>
+                  <div
+                    className={
+                      hasSingleOperator
+                        ? 'grid grid-cols-[minmax(0,1fr)_2.5rem] gap-2 sm:items-start'
+                        : 'grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.25fr)_2.5rem] gap-2 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_2.5rem] sm:items-start'
+                    }
+                  >
                     {operatorSelect}
-                    {valueControl}
+                    {wrappedValueControl}
                     {removeButton}
                   </div>
                 </div>
               ) : (
-                <div className='grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(10rem,1.25fr)_2.5rem] sm:items-center'>
+                <div
+                  className={
+                    hasSingleOperator
+                      ? 'grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1.2fr)_minmax(10rem,2.15fr)_2.5rem] sm:items-start'
+                      : 'grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(10rem,1.25fr)_2.5rem] sm:items-start'
+                  }
+                >
                   {fieldSelect}
                   {operatorSelect}
-                  {valueControl}
+                  {wrappedValueControl}
                   {removeButton}
                 </div>
               )}
@@ -584,6 +621,7 @@ export function FilterBuilder({
   allowNestedGroups = false,
   groupJoinLabel,
   singleGroup = false,
+  invalidRegexLabel,
 }: FilterBuilderProps) {
   const normalizedValue = normalizeValue(value, allowNestedGroups, maxDepth, singleGroup);
   const displayGroups =
@@ -648,6 +686,7 @@ export function FilterBuilder({
                 onRemove={singleGroup ? undefined : () => updateGroups(displayGroups.filter((_, itemIndex) => itemIndex !== groupIndex))}
                 operatorLabel={operatorLabel}
                 valueLabel={valueLabel}
+                invalidRegexLabel={invalidRegexLabel}
               />
             </div>
           ))}

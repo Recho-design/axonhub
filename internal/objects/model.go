@@ -58,6 +58,9 @@ const (
 	ModelAssociationConditionFieldHasAudio            = "has_audio"
 	ModelAssociationConditionFieldRequestHeader       = "request_header"
 	ModelAssociationConditionFieldRequestHeaderPrefix = "request_header."
+	// ModelAssociationConditionFieldMessagesText is the concatenated text of
+	// all request messages. It is matched with the regex/not_regex operators.
+	ModelAssociationConditionFieldMessagesText = "messages_text"
 )
 
 type ModelAssociation struct {
