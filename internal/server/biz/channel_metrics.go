@@ -55,6 +55,18 @@ type channelMetrics struct {
 	aggregatedMetrics *AggregatedMetrics
 }
 
+type channelModelKey struct {
+	ChannelID int
+	ModelID   string
+}
+
+type channelModelHealth struct {
+	mu sync.Mutex
+
+	consecutiveFailures int64
+	lastFailureAt       *time.Time
+}
+
 // loadChannelPerformances rebuilds the in-memory load-balancing window from
 // recent request executions.
 func (svc *ChannelService) loadChannelPerformances(ctx context.Context) error {
@@ -69,6 +81,8 @@ func (svc *ChannelService) loadChannelPerformances(ctx context.Context) error {
 		return fmt.Errorf("failed to load channel metrics: %w", err)
 	}
 
+	svc.restoreChannelModelHealth(metrics)
+
 	if len(metrics) == 0 {
 		log.Info(ctx, "No request execution data found in the performance window")
 		return nil
@@ -76,6 +90,9 @@ func (svc *ChannelService) loadChannelPerformances(ctx context.Context) error {
 
 	restored := make(map[int]*channelMetrics, len(metrics))
 	for channelID, m := range metrics {
+		if m == nil {
+			continue
+		}
 		cm := newChannelMetricsWithWindow(channelID, windowSize)
 		svc.populateChannelMetrics(cm, m)
 		restored[channelID] = cm
@@ -108,6 +125,12 @@ type channelMetricsResult struct {
 	LastSelectedAt      *time.Time `json:"last_selected_at"`
 	LastFailureAt       *time.Time `json:"last_failure_at"`
 	Slots               []*timeSlotMetrics
+	Models              map[string]*channelModelMetricsResult
+}
+
+type channelModelMetricsResult struct {
+	ConsecutiveFailures int64
+	LastFailureAt       *time.Time
 }
 
 // channelMetricExecution contains only the fields needed to restore metrics.
@@ -115,6 +138,7 @@ type channelMetricsResult struct {
 type channelMetricExecution struct {
 	ID          int
 	ChannelID   int
+	ModelID     string
 	Status      requestexecution.Status
 	SelectedAt  time.Time
 	CompletedAt time.Time
@@ -126,6 +150,7 @@ func scanChannelMetricExecutions(ctx context.Context, client *ent.Client, since 
 	type queryResult struct {
 		ID        int    `json:"id"`
 		ChannelID int    `json:"channel_id"`
+		ModelID   string `json:"model_id"`
 		Status    string `json:"status"`
 		CreatedAt string `json:"created_at"`
 		UpdatedAt string `json:"updated_at"`
@@ -143,7 +168,7 @@ func scanChannelMetricExecutions(ctx context.Context, client *ent.Client, since 
 			).
 			Order(ent.Asc(requestexecution.FieldID)).
 			Limit(channelMetricsLoadBatchSize).
-			Select(requestexecution.FieldID, requestexecution.FieldChannelID,
+			Select(requestexecution.FieldID, requestexecution.FieldChannelID, requestexecution.FieldModelID,
 				requestexecution.FieldStatus, requestexecution.FieldCreatedAt, requestexecution.FieldUpdatedAt).
 			Scan(ctx, &results)
 		if err != nil {
@@ -163,7 +188,8 @@ func scanChannelMetricExecutions(ctx context.Context, client *ent.Client, since 
 				continue
 			}
 			visit(channelMetricExecution{
-				ID: r.ID, ChannelID: r.ChannelID, Status: requestexecution.Status(r.Status),
+				ID: r.ID, ChannelID: r.ChannelID, ModelID: r.ModelID,
+				Status:     requestexecution.Status(r.Status),
 				SelectedAt: selectedAt, CompletedAt: completedAt,
 			})
 		}
@@ -182,6 +208,8 @@ func (svc *ChannelService) loadAllChannelMetricsFromExecutions(ctx context.Conte
 	metricsMap := make(map[int]*channelMetricsResult)
 	slotsByChannel := make(map[int]map[int64]*timeSlotMetrics)
 	lastSuccess := make(map[int]channelMetricExecution)
+	lastModelSuccess := make(map[channelModelKey]channelMetricExecution)
+	lastModelFailure := make(map[channelModelKey]channelMetricExecution)
 	getSlot := func(channelID int, at time.Time) *timeSlotMetrics {
 		ts := at.Unix()
 		slot := slotsByChannel[channelID][ts]
@@ -190,6 +218,18 @@ func (svc *ChannelService) loadAllChannelMetricsFromExecutions(ctx context.Conte
 			slotsByChannel[channelID][ts] = slot
 		}
 		return slot
+	}
+	getModelMetrics := func(channelID int, modelID string) *channelModelMetricsResult {
+		m := metricsMap[channelID]
+		if m.Models == nil {
+			m.Models = make(map[string]*channelModelMetricsResult)
+		}
+		metrics := m.Models[modelID]
+		if metrics == nil {
+			metrics = &channelModelMetricsResult{}
+			m.Models[modelID] = metrics
+		}
+		return metrics
 	}
 	after := func(a, b channelMetricExecution) bool {
 		return a.CompletedAt.After(b.CompletedAt) || a.CompletedAt.Equal(b.CompletedAt) && a.ID > b.ID
@@ -224,6 +264,24 @@ func (svc *ChannelService) loadAllChannelMetricsFromExecutions(ctx context.Conte
 				m.LastFailureAt = &r.CompletedAt
 			}
 		}
+
+		if r.ModelID == "" || (r.Status != requestexecution.StatusCompleted && r.Status != requestexecution.StatusFailed) {
+			return
+		}
+		modelMetrics := getModelMetrics(r.ChannelID, r.ModelID)
+		key := channelModelKey{ChannelID: r.ChannelID, ModelID: r.ModelID}
+		switch r.Status {
+		case requestexecution.StatusCompleted:
+			if previous, ok := lastModelSuccess[key]; !ok || after(r, previous) {
+				lastModelSuccess[key] = r
+			}
+		case requestexecution.StatusFailed:
+			if previous, ok := lastModelFailure[key]; !ok || after(r, previous) {
+				lastModelFailure[key] = r
+				lastFailureAt := r.CompletedAt
+				modelMetrics.LastFailureAt = &lastFailureAt
+			}
+		}
 	})
 	if err != nil {
 		return nil, err
@@ -238,6 +296,15 @@ func (svc *ChannelService) loadAllChannelMetricsFromExecutions(ctx context.Conte
 		}
 		if success, ok := lastSuccess[r.ChannelID]; !ok || after(r, success) {
 			m.ConsecutiveFailures++
+		}
+
+		if r.ModelID == "" {
+			return
+		}
+		modelMetrics := getModelMetrics(r.ChannelID, r.ModelID)
+		key := channelModelKey{ChannelID: r.ChannelID, ModelID: r.ModelID}
+		if success, ok := lastModelSuccess[key]; !ok || after(r, success) {
+			modelMetrics.ConsecutiveFailures++
 		}
 	})
 	if err != nil {
@@ -404,6 +471,10 @@ func (svc *ChannelService) getOrCreateChannelMetrics(channelID int, windowSize i
 	svc.channelPerfMetricsLock.Lock()
 	defer svc.channelPerfMetricsLock.Unlock()
 
+	if svc.channelPerfMetrics == nil {
+		svc.channelPerfMetrics = make(map[int]*channelMetrics)
+	}
+
 	// Another writer may have created the channel since the initial lookup.
 	cm := svc.channelPerfMetrics[channelID]
 	if cm == nil {
@@ -412,6 +483,115 @@ func (svc *ChannelService) getOrCreateChannelMetrics(channelID int, windowSize i
 	}
 
 	return cm
+}
+
+// restoreChannelModelHealth publishes the model health rebuilt from executions.
+// It runs at startup only, before any request is served, so replacing the map
+// cannot split live counters across old and new entries.
+func (svc *ChannelService) restoreChannelModelHealth(metrics map[int]*channelMetricsResult) {
+	restored := make(map[channelModelKey]*channelModelHealth)
+	for channelID, m := range metrics {
+		if m == nil {
+			continue
+		}
+		for modelID, modelMetrics := range m.Models {
+			if modelID == "" || modelMetrics == nil {
+				continue
+			}
+
+			var lastFailureAt *time.Time
+			if modelMetrics.LastFailureAt != nil {
+				value := *modelMetrics.LastFailureAt
+				lastFailureAt = &value
+			}
+
+			restored[channelModelKey{ChannelID: channelID, ModelID: modelID}] = &channelModelHealth{
+				consecutiveFailures: modelMetrics.ConsecutiveFailures,
+				lastFailureAt:       lastFailureAt,
+			}
+		}
+	}
+
+	svc.channelModelHealthLock.Lock()
+	svc.channelModelHealth = restored
+	svc.channelModelHealthLock.Unlock()
+}
+
+func (svc *ChannelService) getChannelModelHealth(key channelModelKey) *channelModelHealth {
+	svc.channelModelHealthLock.RLock()
+	defer svc.channelModelHealthLock.RUnlock()
+
+	return svc.channelModelHealth[key]
+}
+
+func (svc *ChannelService) getOrCreateChannelModelHealth(key channelModelKey) *channelModelHealth {
+	if health := svc.getChannelModelHealth(key); health != nil {
+		return health
+	}
+
+	svc.channelModelHealthLock.Lock()
+	defer svc.channelModelHealthLock.Unlock()
+
+	if svc.channelModelHealth == nil {
+		svc.channelModelHealth = make(map[channelModelKey]*channelModelHealth)
+	}
+
+	health := svc.channelModelHealth[key]
+	if health == nil {
+		health = &channelModelHealth{}
+		svc.channelModelHealth[key] = health
+	}
+
+	return health
+}
+
+func (svc *ChannelService) recordChannelModelPerformance(perf *PerformanceRecord) {
+	if perf.Model == "" || perf.Canceled {
+		return
+	}
+
+	health := svc.getOrCreateChannelModelHealth(channelModelKey{
+		ChannelID: perf.ChannelID,
+		ModelID:   perf.Model,
+	})
+	health.mu.Lock()
+	defer health.mu.Unlock()
+
+	if perf.Success {
+		health.consecutiveFailures = 0
+		return
+	}
+
+	health.consecutiveFailures++
+	if health.lastFailureAt == nil || health.lastFailureAt.Before(perf.EndTime) {
+		lastFailureAt := perf.EndTime
+		health.lastFailureAt = &lastFailureAt
+	}
+}
+
+// GetChannelModelMetrics returns performance health metrics for one channel and
+// upstream model. If in-memory metrics are not available, it returns an empty
+// snapshot.
+func (svc *ChannelService) GetChannelModelMetrics(ctx context.Context, channelID int, modelID string) (*AggregatedMetrics, error) {
+	health := svc.getChannelModelHealth(channelModelKey{ChannelID: channelID, ModelID: modelID})
+	if health == nil {
+		return &AggregatedMetrics{}, nil
+	}
+
+	health.mu.Lock()
+	defer health.mu.Unlock()
+
+	metrics := &AggregatedMetrics{
+		metricsRecord: metricsRecord{
+			ConsecutiveFailures: health.consecutiveFailures,
+		},
+	}
+	if health.lastFailureAt != nil {
+		lastFailureAt := *health.lastFailureAt
+		metrics.LastFailureAt = &lastFailureAt
+	}
+
+	return metrics.Clone(), nil
 }
 
 const latencyEWMAAlpha = 0.3
@@ -522,6 +702,9 @@ func (svc *ChannelService) RecordPerformance(ctx context.Context, perf *Performa
 			log.Error(ctx, "panic in record performance", log.Any("panic", r))
 		}
 	}()
+	// Model health is independent of the channel sliding window, so it is
+	// published even when the outcome arrives after its channel slot expired.
+	defer svc.recordChannelModelPerformance(perf)
 
 	if perf.Success {
 		svc.clearAutoDisableCountsOnSuccess(perf)
@@ -533,21 +716,22 @@ func (svc *ChannelService) RecordPerformance(ctx context.Context, perf *Performa
 		svc.evaluateAutoDisableForFailure(ctx, perf)
 	}
 
-	windowSize := svc.performanceWindowSeconds()
+	svc.recordChannelPerformance(ctx, perf)
+}
 
+// recordChannelPerformance updates the channel-level sliding window.
+func (svc *ChannelService) recordChannelPerformance(ctx context.Context, perf *PerformanceRecord) {
+	windowSize := svc.performanceWindowSeconds()
 	cm := svc.getOrCreateChannelMetrics(perf.ChannelID, windowSize)
+
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	ts := perf.EndTime.Unix()
-
-	// Get or create time slot for this second
-	slot := cm.getOrCreateTimeSlot(ts, perf.EndTime, windowSize)
+	slot := cm.getOrCreateTimeSlot(perf.EndTime.Unix(), perf.EndTime, windowSize)
 	if slot == nil {
 		return
 	}
 
-	// Record success or failure
 	if perf.Success {
 		cm.recordSuccess(slot, perf)
 	} else if !perf.Canceled {
@@ -671,7 +855,11 @@ func deriveErrorMessage(errorCode int) string {
 
 // PerformanceRecord contains performance metrics collected during request processing.
 type PerformanceRecord struct {
-	ChannelID          int
+	ChannelID int
+	Model     string // Actual upstream model used for this attempt, if known.
+	// AttemptSeq identifies the outbound attempt that owns this record. It lets
+	// the recorder ignore stale records after a retry has begun.
+	AttemptSeq         uint64
 	APIKey             string // API key used for the request (sensitive, do not log full value)
 	StartTime          time.Time
 	FirstTokenTime     *time.Time

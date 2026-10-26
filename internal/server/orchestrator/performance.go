@@ -67,6 +67,8 @@ func (m *performanceRecording) OnOutboundRawRequest(ctx context.Context, request
 	perf := biz.PerformanceRecord{}
 	perf.StartTime = time.Now()
 	perf.ChannelID = channel.ID
+	perf.Model = m.outbound.GetCurrentModelID()
+	perf.AttemptSeq = m.outbound.state.AttemptSeq
 	perf.Success = false
 	perf.RequestCompleted = false
 	perf.Stream = streamFlag
@@ -134,6 +136,12 @@ func (m *performanceRecording) OnOutboundRawError(ctx context.Context, err error
 	}
 
 	perf := m.outbound.state.Perf
+	if perf.AttemptSeq != m.outbound.state.AttemptSeq {
+		// Pre-request middlewares can fail before this attempt installs its own
+		// record. Never overwrite an earlier attempt's outcome.
+		return
+	}
+
 	if errors.Is(err, context.Canceled) {
 		perf.MarkCanceled()
 	} else {

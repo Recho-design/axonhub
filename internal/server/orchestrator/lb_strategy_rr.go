@@ -176,7 +176,7 @@ func NewRoundRobinHealthStrategy(metricsProvider ChannelMetricsProvider) *RoundR
 }
 
 func (s *RoundRobinHealthStrategy) Score(ctx context.Context, channel *biz.Channel) float64 {
-	metrics, err := s.metricsProvider.GetChannelMetrics(ctx, channel.ID)
+	metrics, err := s.metricsFor(ctx, channel)
 	if err != nil {
 		return s.metricsErrorPenalty
 	}
@@ -189,7 +189,7 @@ func (s *RoundRobinHealthStrategy) Score(ctx context.Context, channel *biz.Chann
 }
 
 func (s *RoundRobinHealthStrategy) ScoreWithDebug(ctx context.Context, channel *biz.Channel) (float64, StrategyScore) {
-	metrics, err := s.metricsProvider.GetChannelMetrics(ctx, channel.ID)
+	metrics, err := s.metricsFor(ctx, channel)
 	if err != nil {
 		return s.metricsErrorPenalty, StrategyScore{
 			StrategyName: s.Name(),
@@ -207,6 +207,7 @@ func (s *RoundRobinHealthStrategy) ScoreWithDebug(ctx context.Context, channel *
 	}
 
 	details := map[string]any{
+		"model":                candidateModelFromContext(ctx),
 		"consecutive_failures": metrics.ConsecutiveFailures,
 		"failure_threshold":    s.failureThreshold,
 		"failure_cooldown":     s.failureCooldown.String(),
@@ -225,12 +226,46 @@ func (s *RoundRobinHealthStrategy) ScoreWithDebug(ctx context.Context, channel *
 	}
 }
 
+// metricsFor prefers the upstream-model health of the candidate being scored
+// and falls back to channel-level health when no model context is available.
+func (s *RoundRobinHealthStrategy) metricsFor(ctx context.Context, channel *biz.Channel) (*biz.AggregatedMetrics, error) {
+	if metrics, ok := modelMetricsFromContext(ctx, s.metricsProvider, channel.ID); ok {
+		return metrics, nil
+	}
+
+	return s.metricsProvider.GetChannelMetrics(ctx, channel.ID)
+}
+
 func (s *RoundRobinHealthStrategy) Name() string {
 	return "RoundRobinHealth"
 }
 
-func (s *RoundRobinHealthStrategy) IsUnhealthy(ctx context.Context, channel *biz.Channel) bool {
-	metrics, err := s.metricsProvider.GetChannelMetrics(ctx, channel.ID)
+func (s *RoundRobinHealthStrategy) IsUnhealthy(ctx context.Context, candidate *ChannelModelsCandidate) bool {
+	if candidate == nil || candidate.Channel == nil {
+		return false
+	}
+
+	modelProvider, supportsModelMetrics := s.metricsProvider.(ChannelModelMetricsProvider)
+	if supportsModelMetrics && len(candidate.Models) > 0 {
+		allModelsAvailable := true
+		for _, entry := range candidate.Models {
+			metrics, err := modelProvider.GetChannelModelMetrics(ctx, candidate.Channel.ID, entry.ActualModel)
+			if err != nil || metrics == nil {
+				allModelsAvailable = false
+				continue
+			}
+			if !s.isUnhealthy(metrics) {
+				return false
+			}
+		}
+		if allModelsAvailable {
+			return true
+		}
+	}
+
+	// The real provider returns an empty snapshot for an unknown model, so this
+	// fallback is only reachable for providers that cannot serve model metrics.
+	metrics, err := s.metricsProvider.GetChannelMetrics(ctx, candidate.Channel.ID)
 	if err != nil {
 		return false
 	}

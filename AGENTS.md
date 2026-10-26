@@ -81,3 +81,11 @@ All detailed rules are in `.agent/rules/`:
 | [e2e.md](.agent/rules/e2e.md) | `frontend/tests/**/*.ts` | E2E testing rules |
 | [docs.md](.agent/rules/docs.md) | `docs/**/*.md` | Documentation rules |
 | [workflows/add-channel.md](.agent/rules/workflows/add-channel.md) | Manual | Workflow for adding a new channel |
+
+## Specs Index
+
+Implementation conventions distilled from Heavy tasks live in `.agents/specs/`:
+
+| File | Scope | Description |
+|------|-------|-------------|
+| [model-level-channel-health.md](.agents/specs/model-level-channel-health.md) | `internal/server/biz/channel_metrics.go`, `internal/server/orchestrator/**` | 模型级渠道健康键、候选重排、AttemptSeq 所有权 |

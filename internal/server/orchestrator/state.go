@@ -75,6 +75,10 @@ type PersistenceState struct {
 	CurrentCandidate *ChannelModelsCandidate
 	// CurrentModelIndex is the current model index in CurrentCandidate.Models
 	CurrentModelIndex int
+	// AttemptSeq identifies the current outbound attempt. Performance records
+	// carry the sequence they were created for so late or pre-request errors
+	// cannot overwrite an earlier attempt's terminal outcome.
+	AttemptSeq uint64
 
 	// Perf records channel health and latency for the current request. For stream
 	// terminals, incomplete (token limit or content filtering) counts as channel

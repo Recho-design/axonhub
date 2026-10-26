@@ -47,7 +47,7 @@ func NewErrorAwareStrategy(metricsProvider ChannelMetricsProvider) *ErrorAwareSt
 // Score returns a health score based on recent errors.
 // Production path without debug logging.
 func (s *ErrorAwareStrategy) Score(ctx context.Context, channel *biz.Channel) float64 {
-	metrics, err := s.metricsProvider.GetChannelMetrics(ctx, channel.ID)
+	metrics, err := s.metricsFor(ctx, channel)
 	if err != nil {
 		// If we can't get metrics, give neutral score
 		return s.maxScore / 2
@@ -97,7 +97,7 @@ func (s *ErrorAwareStrategy) ScoreWithDebug(ctx context.Context, channel *biz.Ch
 		log.String("channel_name", channel.Name),
 	)
 
-	metrics, err := s.metricsProvider.GetChannelMetrics(ctx, channel.ID)
+	metrics, err := s.metricsFor(ctx, channel)
 	if err != nil {
 		// If we can't get metrics, give neutral score
 		neutralScore := s.maxScore / 2
@@ -119,6 +119,7 @@ func (s *ErrorAwareStrategy) ScoreWithDebug(ctx context.Context, channel *biz.Ch
 
 	score := s.maxScore
 	details := map[string]any{
+		"model":                candidateModelFromContext(ctx),
 		"consecutive_failures": metrics.ConsecutiveFailures,
 		"request_count":        metrics.RequestCount,
 	}
@@ -201,8 +202,17 @@ func (s *ErrorAwareStrategy) ScoreWithDebug(ctx context.Context, channel *biz.Ch
 	}
 }
 
+// metricsFor prefers the upstream-model health of the candidate being scored
+// and falls back to channel-level health when no model context is available.
+func (s *ErrorAwareStrategy) metricsFor(ctx context.Context, channel *biz.Channel) (*biz.AggregatedMetrics, error) {
+	if metrics, ok := modelMetricsFromContext(ctx, s.metricsProvider, channel.ID); ok {
+		return metrics, nil
+	}
+
+	return s.metricsProvider.GetChannelMetrics(ctx, channel.ID)
+}
+
 // Name returns the strategy name.
 func (s *ErrorAwareStrategy) Name() string {
 	return "ErrorAware"
 }
-

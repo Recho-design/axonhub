@@ -59,13 +59,14 @@ func NewChatCompletionOrchestrator(
 		rateLimitStrategy,
 	)
 
+	roundRobinHealthFilter := NewRoundRobinHealthStrategy(channelService)
 	failoverLoadBalancer := NewLoadBalancer(systemService, channelService,
-		NewWeightStrategy(), NewRandomStrategy(), rateLimitStrategy)
+		NewWeightStrategy(), NewRandomStrategy(), rateLimitStrategy,
+	).WithRoundRobinHealthFilter(roundRobinHealthFilter)
 
 	circuitBreakerLoadBalancer := NewLoadBalancer(systemService, channelService,
 		NewWeightStrategy(), NewModelAwareCircuitBreakerStrategy(modelCircuitBreaker), rateLimitStrategy)
 
-	roundRobinHealthFilter := NewRoundRobinHealthStrategy(channelService)
 	roundRobinLoadBalancer := NewLoadBalancer(systemService, channelService,
 		NewRoundRobinStrategy(channelService),
 		rateLimitStrategy,

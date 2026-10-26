@@ -375,6 +375,8 @@ func TestPersistentOutboundTransformer_TransformRequest_OriginalModelRestoration
 			// Assert
 			require.NoError(t, err)
 			require.NotNil(t, channelRequest)
+			require.Equal(t, uint64(1), processor.state.AttemptSeq,
+				"TransformRequest must advance the attempt sequence used to reject stale performance records")
 
 			// Verify model restoration in the request body
 			bodyStr := string(channelRequest.Body)

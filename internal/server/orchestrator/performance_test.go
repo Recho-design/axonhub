@@ -419,6 +419,74 @@ func TestRecordPerformanceStream_QueuesCompletedPerformanceAfterFinalUsage(t *te
 	assert.Equal(t, 1, recordCalls)
 }
 
+// TestPerformanceRecording_OnOutboundRawErrorIgnoresStaleAttempt verifies that
+// a pre-request middleware failure cannot overwrite an earlier attempt's
+// terminal outcome.
+func TestPerformanceRecording_OnOutboundRawErrorIgnoresStaleAttempt(t *testing.T) {
+	state := &PersistenceState{
+		AttemptSeq: 2,
+		Perf: &biz.PerformanceRecord{
+			ChannelID:        1,
+			Model:            "gpt-a",
+			AttemptSeq:       1,
+			Success:          true,
+			RequestCompleted: true,
+		},
+	}
+	outbound := &PersistentOutboundTransformer{state: state}
+	middleware := &performanceRecording{outbound: outbound}
+
+	middleware.OnOutboundRawError(context.Background(), &httpclient.Error{
+		StatusCode: 500,
+		Body:       []byte("upstream failed"),
+	})
+
+	require.True(t, state.Perf.Success)
+	require.True(t, state.Perf.RequestCompleted)
+	require.Equal(t, "gpt-a", state.Perf.Model)
+	require.Zero(t, state.Perf.ResponseStatusCode)
+}
+
+// TestPerformanceRecording_OnOutboundRawErrorOverridesCurrentAttemptSuccess
+// covers the non-stream content-error path: the response middleware marks the
+// attempt successful before content detection reports an error, and the error
+// callback for the same attempt must still record the failure.
+func TestPerformanceRecording_OnOutboundRawErrorOverridesCurrentAttemptSuccess(t *testing.T) {
+	ctx, client := setupTest(t)
+
+	channelService := newTestChannelServiceForChannels(client)
+	channel := &biz.Channel{
+		Channel: &ent.Channel{ID: 1, Name: "test-channel"},
+	}
+	state := &PersistenceState{
+		ChannelService:   channelService,
+		CurrentCandidate: &ChannelModelsCandidate{Channel: channel, Models: []biz.ChannelModelEntry{{ActualModel: "gpt-a"}}},
+		AttemptSeq:       1,
+	}
+	outbound := &PersistentOutboundTransformer{state: state}
+	middleware := &performanceRecording{outbound: outbound}
+
+	_, err := middleware.OnInboundLlmRequest(ctx, &llm.Request{Model: "gpt-a"})
+	require.NoError(t, err)
+
+	_, err = middleware.OnOutboundRawRequest(ctx, &httpclient.Request{})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), state.Perf.AttemptSeq)
+
+	_, err = middleware.OnOutboundLlmResponse(ctx, &llm.Response{})
+	require.NoError(t, err)
+	require.True(t, state.Perf.Success)
+
+	middleware.OnOutboundRawError(ctx, &httpclient.Error{
+		StatusCode: 500,
+		Body:       []byte("content error"),
+	})
+
+	require.False(t, state.Perf.Success)
+	require.Equal(t, 500, state.Perf.ResponseStatusCode)
+	require.Equal(t, "gpt-a", state.Perf.Model)
+}
+
 type responseSliceStream struct {
 	events []*llm.Response
 	index  int

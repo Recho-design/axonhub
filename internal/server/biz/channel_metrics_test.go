@@ -984,3 +984,142 @@ func TestChannelMetrics_RecoveryCompletionOrderAcrossBatches(t *testing.T) {
 	require.Equal(t, int64(channelMetricsLoadBatchSize+2), metrics[1].RequestCount)
 	require.Zero(t, metrics[1].ConsecutiveFailures)
 }
+
+func TestChannelModelMetrics_RecordPerformanceIsIndependent(t *testing.T) {
+	client := enttest.NewEntClient(t, "sqlite3", "file:model-health-live?mode=memory&_fk=0")
+	defer client.Close()
+
+	ctx := authz.WithTestBypass(ent.NewContext(context.Background(), client))
+	svc := newTestChannelService(client)
+	now := time.Now().UTC().Truncate(time.Second)
+	record := func(model string, success, canceled bool, at time.Time) {
+		t.Helper()
+		svc.RecordPerformance(ctx, &PerformanceRecord{
+			ChannelID:        1,
+			Model:            model,
+			EndTime:          at,
+			Success:          success,
+			Canceled:         canceled,
+			RequestCompleted: true,
+			ResponseStatusCode: func() int {
+				if success || canceled {
+					return 0
+				}
+				return 500
+			}(),
+		})
+	}
+
+	record("model-a", false, false, now.Add(-4*time.Second))
+	record("model-b", false, false, now.Add(-3*time.Second))
+	record("model-a", false, false, now.Add(-2*time.Second))
+
+	modelA, err := svc.GetChannelModelMetrics(ctx, 1, "model-a")
+	require.NoError(t, err)
+	require.Equal(t, int64(2), modelA.ConsecutiveFailures)
+	require.Equal(t, now.Add(-2*time.Second).Unix(), modelA.LastFailureAt.Unix())
+
+	modelB, err := svc.GetChannelModelMetrics(ctx, 1, "model-b")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), modelB.ConsecutiveFailures)
+	require.Equal(t, now.Add(-3*time.Second).Unix(), modelB.LastFailureAt.Unix())
+
+	// A success clears only its model's streak and retains its last failure time.
+	record("model-b", true, false, now.Add(-time.Second))
+	modelB, err = svc.GetChannelModelMetrics(ctx, 1, "model-b")
+	require.NoError(t, err)
+	require.Zero(t, modelB.ConsecutiveFailures)
+	require.Equal(t, now.Add(-3*time.Second).Unix(), modelB.LastFailureAt.Unix())
+
+	// Cancellation must not change the model's health.
+	record("model-a", false, true, now)
+	modelAAfterCancel, err := svc.GetChannelModelMetrics(ctx, 1, "model-a")
+	require.NoError(t, err)
+	require.Equal(t, int64(2), modelAAfterCancel.ConsecutiveFailures)
+	require.Equal(t, modelA.LastFailureAt.Unix(), modelAAfterCancel.LastFailureAt.Unix())
+
+	// An ordinary success clears the other streak, while an empty model is never recorded.
+	record("model-a", true, false, now.Add(time.Second))
+	record("", false, false, now.Add(2*time.Second))
+	modelA, err = svc.GetChannelModelMetrics(ctx, 1, "model-a")
+	require.NoError(t, err)
+	require.Zero(t, modelA.ConsecutiveFailures)
+	require.Equal(t, now.Add(-2*time.Second).Unix(), modelA.LastFailureAt.Unix())
+
+	emptyModel, err := svc.GetChannelModelMetrics(ctx, 1, "")
+	require.NoError(t, err)
+	require.Zero(t, emptyModel.ConsecutiveFailures)
+	require.Nil(t, emptyModel.LastFailureAt)
+	require.Len(t, svc.channelModelHealth, 2)
+
+	// Returned snapshots must not share the failure timestamp pointer with one another.
+	anotherModelA, err := svc.GetChannelModelMetrics(ctx, 1, "model-a")
+	require.NoError(t, err)
+	require.NotSame(t, modelA.LastFailureAt, anotherModelA.LastFailureAt)
+}
+
+func TestChannelModelMetrics_RecoveryRestoresHealth(t *testing.T) {
+	client := enttest.NewEntClient(t, "sqlite3", "file:model-health-recovery?mode=memory&_fk=0")
+	defer client.Close()
+
+	ctx := authz.WithTestBypass(ent.NewContext(context.Background(), client))
+	now := time.Now().UTC().Truncate(time.Second)
+	createExecution := func(requestID int, modelID string, status requestexecution.Status, createdAt, completedAt time.Time) {
+		t.Helper()
+		client.RequestExecution.Create().
+			SetProjectID(1).
+			SetRequestID(requestID).
+			SetChannelID(1).
+			SetModelID(modelID).
+			SetRequestBody(objects.JSONRawMessage(`{}`)).
+			SetStatus(status).
+			SetCreatedAt(createdAt).
+			SetUpdatedAt(completedAt).
+			SaveX(ctx)
+	}
+
+	// model-a failed once and then succeeded; its streak is clear but its last
+	// failure timestamp is retained. model-b has two failures after no success.
+	createExecution(1, "model-a", requestexecution.StatusFailed, now.Add(-9*time.Minute), now.Add(-4*time.Minute))
+	createExecution(2, "model-a", requestexecution.StatusCompleted, now.Add(-8*time.Minute), now.Add(-3*time.Minute))
+	createExecution(3, "model-b", requestexecution.StatusFailed, now.Add(-7*time.Minute), now.Add(-2*time.Minute))
+	createExecution(4, "model-b", requestexecution.StatusFailed, now.Add(-6*time.Minute), now.Add(-time.Minute))
+	// Empty model IDs remain part of the existing channel-level metrics but are
+	// intentionally absent from model-level health.
+	createExecution(5, "", requestexecution.StatusFailed, now.Add(-5*time.Minute), now.Add(-30*time.Second))
+
+	svc := newTestChannelService(client)
+	metrics, err := svc.loadAllChannelMetricsFromExecutions(ctx, client, now.Add(-10*time.Minute))
+	require.NoError(t, err)
+	require.Contains(t, metrics[1].Models, "model-a")
+	require.Contains(t, metrics[1].Models, "model-b")
+	require.NotContains(t, metrics[1].Models, "")
+	require.Zero(t, metrics[1].Models["model-a"].ConsecutiveFailures)
+	require.Equal(t, now.Add(-4*time.Minute).Unix(), metrics[1].Models["model-a"].LastFailureAt.Unix())
+	require.Equal(t, int64(2), metrics[1].Models["model-b"].ConsecutiveFailures)
+	require.Equal(t, now.Add(-time.Minute).Unix(), metrics[1].Models["model-b"].LastFailureAt.Unix())
+
+	// Rebuild through the startup publication path, not just the raw result.
+	require.NoError(t, svc.loadChannelPerformances(ctx))
+	modelA, err := svc.GetChannelModelMetrics(ctx, 1, "model-a")
+	require.NoError(t, err)
+	require.Zero(t, modelA.ConsecutiveFailures)
+	require.Equal(t, now.Add(-4*time.Minute).Unix(), modelA.LastFailureAt.Unix())
+	modelB, err := svc.GetChannelModelMetrics(ctx, 1, "model-b")
+	require.NoError(t, err)
+	require.Equal(t, int64(2), modelB.ConsecutiveFailures)
+	require.Equal(t, now.Add(-time.Minute).Unix(), modelB.LastFailureAt.Unix())
+	emptyModel, err := svc.GetChannelModelMetrics(ctx, 1, "")
+	require.NoError(t, err)
+	require.Zero(t, emptyModel.ConsecutiveFailures)
+	require.Nil(t, emptyModel.LastFailureAt)
+
+	// The channel-level result remains unchanged and includes the empty-model row.
+	channelMetrics, err := svc.GetChannelMetrics(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), channelMetrics.RequestCount)
+	require.Equal(t, int64(1), channelMetrics.SuccessCount)
+	require.Equal(t, int64(4), channelMetrics.FailureCount)
+	require.Equal(t, int64(3), channelMetrics.ConsecutiveFailures)
+	require.Equal(t, now.Add(-30*time.Second).Unix(), channelMetrics.LastFailureAt.Unix())
+}

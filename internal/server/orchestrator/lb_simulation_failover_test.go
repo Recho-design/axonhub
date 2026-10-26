@@ -14,13 +14,13 @@ func TestFailoverStrategy_Simulation(t *testing.T) {
 	ctx := context.Background()
 	modelID := "gpt-4"
 
-	// Setup metrics provider (not used by Weight+Random but kept for structure)
+	// Setup metrics provider for the failover health filter.
 	metricsProvider := &mockMetricsProvider{
 		metrics: make(map[int]*biz.AggregatedMetrics),
 	}
 
-	// Setup LoadBalancer with Weight + Random strategies
-	// This combination is used in the 'failover' load balancer strategy in orchestrator.go
+	// Setup LoadBalancer with Weight + Random strategies and the health filter
+	// used by the 'failover' load balancer strategy in orchestrator.go.
 	policyProvider := &mockRetryPolicyProvider{
 		policy: &biz.RetryPolicy{
 			Enabled:              true,
@@ -33,7 +33,7 @@ func TestFailoverStrategy_Simulation(t *testing.T) {
 	lb := NewLoadBalancer(policyProvider, selectionTracker,
 		NewWeightStrategy(),
 		NewRandomStrategy(),
-	)
+	).WithRoundRobinHealthFilter(NewRoundRobinHealthStrategy(metricsProvider))
 
 	// Create 3 channels with different weights
 	// Ch1: Weight 100
@@ -87,26 +87,24 @@ func TestFailoverStrategy_Simulation(t *testing.T) {
 	assert.Equal(t, 2, sorted[1].Channel.ID)
 	assert.Equal(t, 3, sorted[2].Channel.ID)
 
-	// 2. Simulate failures for channel-1
-	// In 'failover' strategy (Weight + Random), failures do NOT affect sorting
-	// because there is no ErrorAwareStrategy.
-	// The failover happens at the pipeline level by trying the next candidate.
+	// 2. Simulate failures for channel-1. The failover health filter moves
+	// the failed channel behind the healthy group, while preserving weight order
+	// within that healthy group.
 
 	// Recording failures...
 	m1 := &biz.AggregatedMetrics{}
 	m1.ConsecutiveFailures = 5
 	metricsProvider.metrics[1] = m1
 
-	// Sort again - should still be the same order!
+	// The failed channel is now last; healthy channels retain their weight order.
 	sorted = selectAll()
-	assert.Equal(t, 1, sorted[0].Channel.ID, "Failover strategy should still prioritize Ch1 despite failures (it's not error-aware)")
-	assert.Equal(t, 2, sorted[1].Channel.ID)
-	assert.Equal(t, 3, sorted[2].Channel.ID)
+	assert.Equal(t, 2, sorted[0].Channel.ID, "Failover health filter should prioritize healthy channels")
+	assert.Equal(t, 3, sorted[1].Channel.ID, "Healthy channels should retain weight order")
+	assert.Equal(t, 1, sorted[2].Channel.ID, "Recently failing channel should be last")
 
-	// 3. Verify that the orchestrator's failover would work by picking the next in list
-	// This is what the 'failover' strategy means in this context:
-	// a static priority list that the pipeline iterates through.
-	assert.Equal(t, "channel-1", sorted[0].Channel.Name)
-	assert.Equal(t, "channel-2", sorted[1].Channel.Name)
-	assert.Equal(t, "channel-3", sorted[2].Channel.Name)
+	// 3. Verify that the orchestrator's failover still iterates the resulting
+	// priority list and reaches the next healthy channel after a failure.
+	assert.Equal(t, "channel-2", sorted[0].Channel.Name)
+	assert.Equal(t, "channel-3", sorted[1].Channel.Name)
+	assert.Equal(t, "channel-1", sorted[2].Channel.Name)
 }

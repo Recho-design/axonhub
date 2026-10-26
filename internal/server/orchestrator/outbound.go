@@ -749,6 +749,10 @@ func (p *PersistentOutboundTransformer) TransformError(ctx context.Context, rawE
 }
 
 func (p *PersistentOutboundTransformer) TransformRequest(ctx context.Context, llmRequest *llm.Request) (*httpclient.Request, error) {
+	if p.state != nil {
+		p.state.AttemptSeq++
+	}
+
 	hasAdditionalTools := containsAdditionalToolsInputItems(llmRequest)
 
 	// Candidates should already be selected by inbound transformer

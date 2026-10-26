@@ -58,6 +58,8 @@ type StrategyScore struct {
 type ChannelDecision struct {
 	// Channel is the channel object
 	Channel *biz.Channel
+	// Candidate is the resolved channel/model candidate being scored.
+	Candidate *ChannelModelsCandidate
 	// OriginalIndex is the candidate's position before sorting.
 	OriginalIndex int
 	// TotalScore is the sum of all strategy scores
@@ -87,6 +89,7 @@ type RetryPolicyProvider interface {
 
 // Save the requested model ID in the context, to let model aware strategy use it, e.g. circuit breaker.
 type modelContextKey struct{}
+type candidateModelContextKey struct{}
 type streamContextKey struct{}
 
 // contextWithRequestedModel adds the requested model ID to the context.
@@ -101,6 +104,31 @@ func requestedModelFromContext(ctx context.Context) string {
 	}
 
 	return ""
+}
+
+// contextWithCandidateModel adds the first model of the candidate being scored
+// to the context for model-aware strategies.
+func contextWithCandidateModel(ctx context.Context, modelID string) context.Context {
+	return context.WithValue(ctx, candidateModelContextKey{}, modelID)
+}
+
+// candidateModelFromContext extracts the candidate model being scored.
+func candidateModelFromContext(ctx context.Context) string {
+	if model, ok := ctx.Value(candidateModelContextKey{}).(string); ok {
+		return model
+	}
+
+	return ""
+}
+
+// candidateScoreContext adds the candidate's first model to the context so
+// model-aware strategies can score the exact upstream model being attempted.
+func candidateScoreContext(ctx context.Context, candidate *ChannelModelsCandidate) context.Context {
+	if modelID := healthModelOf(candidate); modelID != "" {
+		return contextWithCandidateModel(ctx, modelID)
+	}
+
+	return ctx
 }
 
 func contextWithRequestStream(ctx context.Context, stream bool) context.Context {
@@ -145,8 +173,8 @@ func (lb *LoadBalancer) WithoutWeightTieBreaker() *LoadBalancer {
 	return lb
 }
 
-// WithRoundRobinHealthFilter moves recently failing channels behind healthy
-// round-robin candidates after the round-robin order is calculated.
+// WithRoundRobinHealthFilter moves recently failing models/channels behind
+// healthy round-robin and failover candidates after their order is calculated.
 func (lb *LoadBalancer) WithRoundRobinHealthFilter(filter *RoundRobinHealthStrategy) *LoadBalancer {
 	lb.roundRobinHealthFilter = filter
 
@@ -220,9 +248,11 @@ func (lb *LoadBalancer) sortProduction(
 	scored := make([]candidateScore, len(candidates))
 	for i, c := range candidates {
 		totalScore := 0.0
+		candidateCtx := candidateScoreContext(ctx, c)
+
 		// Apply all strategies
 		for _, strategy := range lb.strategies {
-			totalScore += strategy.Score(ctx, c.Channel)
+			totalScore += strategy.Score(candidateCtx, c.Channel)
 		}
 
 		scored[i] = candidateScore{
@@ -302,7 +332,7 @@ func (lb *LoadBalancer) prioritizeHealthyRoundRobinScores(ctx context.Context, s
 			continue
 		}
 
-		if score.candidate != nil && score.candidate.Channel != nil && lb.roundRobinHealthFilter.IsUnhealthy(ctx, score.candidate.Channel) {
+		if score.candidate != nil && lb.roundRobinHealthFilter.IsUnhealthy(ctx, score.candidate) {
 			unhealthy = append(unhealthy, score)
 			continue
 		}
@@ -334,11 +364,12 @@ func (lb *LoadBalancer) sortWithDebug(
 	for i, c := range candidates {
 		totalScore := 0.0
 		strategyScores := make([]StrategyScore, 0, len(lb.strategies))
+		candidateCtx := candidateScoreContext(ctx, c)
 
 		// Apply all strategies and collect detailed scores
 		for _, strategy := range lb.strategies {
 			scoreStart := time.Now()
-			score, strategyScore := strategy.ScoreWithDebug(ctx, c.Channel)
+			score, strategyScore := strategy.ScoreWithDebug(candidateCtx, c.Channel)
 			strategyScore.Duration = time.Since(scoreStart)
 			strategyScores = append(strategyScores, strategyScore)
 			totalScore += score
@@ -346,6 +377,7 @@ func (lb *LoadBalancer) sortWithDebug(
 
 		decisions[i] = ChannelDecision{
 			Channel:        c.Channel,
+			Candidate:      c,
 			OriginalIndex:  i,
 			TotalScore:     totalScore,
 			StrategyScores: strategyScores,
@@ -439,7 +471,7 @@ func (lb *LoadBalancer) prioritizeHealthyRoundRobinDecisions(ctx context.Context
 			continue
 		}
 
-		if decision.Channel != nil && lb.roundRobinHealthFilter.IsUnhealthy(ctx, decision.Channel) {
+		if decision.Candidate != nil && lb.roundRobinHealthFilter.IsUnhealthy(ctx, decision.Candidate) {
 			unhealthy = append(unhealthy, decision)
 			continue
 		}

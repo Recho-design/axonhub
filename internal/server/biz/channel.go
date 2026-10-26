@@ -114,6 +114,7 @@ func NewChannelService(params ChannelServiceParams) *ChannelService {
 		WebhookNotifier:           params.WebhookNotifier,
 		httpClient:                params.HttpClient,
 		channelPerfMetrics:        make(map[int]*channelMetrics),
+		channelModelHealth:        make(map[channelModelKey]*channelModelHealth),
 		apiKeyErrorCounts:         make(map[int]map[string]map[int]int),
 		apiKeyRuleActionsInFlight: make(map[int]map[string]bool),
 		perfCh:                    make(chan *PerformanceRecord, 1024),
@@ -188,6 +189,12 @@ type ChannelService struct {
 	// Each channelMetrics protects its own mutable state with its mu.
 	channelPerfMetrics     map[int]*channelMetrics
 	channelPerfMetricsLock sync.RWMutex
+
+	// channelModelHealth stores health counters for each channel and upstream model.
+	// The map lock protects lookups and publication; each health entry has its own
+	// mutex for mutable counters.
+	channelModelHealth     map[channelModelKey]*channelModelHealth
+	channelModelHealthLock sync.RWMutex
 
 	// apiKeyErrorCounts stores consecutive auto-disable counters.
 	// channelID -> counterKey -> dummy status (always 0) -> count

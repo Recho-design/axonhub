@@ -205,6 +205,9 @@ func (s *DefaultSelector) selectModelCandidates(ctx context.Context, req *llm.Re
 	}
 
 	candidates := filterResolvedCandidatesForRequest(ctx, req, resolvedCandidates)
+	if s.ChannelService != nil {
+		orderCandidateModelsByHealth(ctx, s.ChannelService, candidates)
+	}
 	if len(candidates) == 0 {
 		if log.DebugEnabled(ctx) {
 			log.Debug(ctx, "no candidates matched request conditions",
