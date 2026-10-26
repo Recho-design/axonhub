@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { type RetryableErrorPattern } from '../data/system';
+import { goRegexValidationError } from '@/lib/go-regexp';
 
 interface ContentErrorDetectionEditorProps {
   patterns: RetryableErrorPattern[];
@@ -36,21 +37,13 @@ export function ContentErrorDetectionEditor({ patterns, onChange, disabled = fal
     [onChange, patterns]
   );
 
-  // Compute validation errors for each regex
+  // Compute validation errors for each regex. Patterns are compiled by the
+  // backend with Go's regexp, so validation goes through the shared Go-syntax
+  // helper instead of a raw JavaScript RegExp (which rejects "(?i)" etc.).
   const validationMap = useMemo(() => {
     const errorMap: Record<number, string | null> = {};
     patterns.forEach((p, idx) => {
-      const trimmed = p.pattern.trim();
-      if (!trimmed) {
-        errorMap[idx] = null;
-        return;
-      }
-      try {
-        new RegExp(trimmed);
-        errorMap[idx] = null;
-      } catch (err) {
-        errorMap[idx] = err instanceof Error ? err.message : 'Invalid regex';
-      }
+      errorMap[idx] = goRegexValidationError(p.pattern);
     });
     return errorMap;
   }, [patterns]);

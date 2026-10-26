@@ -373,12 +373,7 @@ func (ts *InboundPersistentStream) Close() error {
 	if decision.state != streamTerminalCompleted && (streamErr != nil || ctxErr != nil) {
 		persistCtx := context.WithoutCancel(ctx)
 		ts.persistFailureChunks(persistCtx)
-
-		if ts.request != nil {
-			if err := ts.requestService.UpdateRequestStatusFromError(persistCtx, ts.request.ID, decision.cause); err != nil {
-				log.Warn(persistCtx, "Failed to update request status from error", log.Cause(err))
-			}
-		}
+		ts.persistRequestFailure(persistCtx, decision.cause)
 
 		return ts.stream.Close()
 	}
@@ -393,12 +388,7 @@ func (ts *InboundPersistentStream) Close() error {
 		persistCtx := context.WithoutCancel(ctx)
 		// Persist partial chunks for debugging; do not mark the request completed.
 		ts.persistFailureChunks(persistCtx)
-
-		if ts.request != nil {
-			if err := ts.requestService.UpdateRequestStatusFromError(persistCtx, ts.request.ID, decision.cause); err != nil {
-				log.Warn(persistCtx, "Failed to update request status from error", log.Cause(err))
-			}
-		}
+		ts.persistRequestFailure(persistCtx, decision.cause)
 
 		return ts.stream.Close()
 	}
@@ -449,6 +439,34 @@ func (ts *InboundPersistentStream) persistFailureChunks(ctx context.Context) {
 	}
 }
 
+// contentErrorDetected reports whether outbound finalization matched the
+// aggregated response body against a configured content error pattern. Outbound
+// finalization completes before this stream closes, so the flag is final here.
+func (ts *InboundPersistentStream) contentErrorDetected() bool {
+	return ts.state != nil && ts.state.ContentErrorMatched
+}
+
+// persistRequestFailure marks the main request failed from the stream decision.
+// A stream whose aggregated content matched an error pattern is a channel fault
+// even when the client interrupted it, so it is not recorded as canceled.
+func (ts *InboundPersistentStream) persistRequestFailure(ctx context.Context, cause error) {
+	if ts.request == nil {
+		return
+	}
+
+	if ts.contentErrorDetected() {
+		if err := ts.requestService.UpdateRequestStatus(ctx, ts.request.ID, request.StatusFailed); err != nil {
+			log.Warn(ctx, "Failed to update request status for content error", log.Cause(err))
+		}
+
+		return
+	}
+
+	if err := ts.requestService.UpdateRequestStatusFromError(ctx, ts.request.ID, cause); err != nil {
+		log.Warn(ctx, "Failed to update request status from error", log.Cause(err))
+	}
+}
+
 // _persistResponse performs the actual persistence with pre-aggregated data.
 // This avoids redundant aggregation when the data is already available.
 func (ts *InboundPersistentStream) _persistResponse(ctx context.Context, responseBody []byte, meta llm.ResponseMeta) {
@@ -471,6 +489,10 @@ func (ts *InboundPersistentStream) _persistResponse(ctx context.Context, respons
 	}
 
 	status := ts.terminalState.requestStatus()
+	if ts.contentErrorDetected() {
+		status = request.StatusFailed
+	}
+
 	err := ts.requestService.UpdateRequestFinalized(ctx, ts.request.ID, status, meta.ID, responseBody, metrics)
 	if err != nil {
 		log.Warn(ctx, "Failed to update finalized request", log.Cause(err), log.Any("status", status))

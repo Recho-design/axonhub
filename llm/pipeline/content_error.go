@@ -187,22 +187,27 @@ func (m *ContentErrorMatcher) DetectContentError(resp *llm.Response) *ContentErr
 // DetectContentErrorInBody returns the first match in a buffered non-streaming
 // JSON response body, or nil. It backs the detection for pass-through responses,
 // where the buffered provider body is delivered instead of the transformed one.
-// Missing fields and malformed bodies simply skip detection.
+// Both the OpenAI shape (choices[].message.content) and the Anthropic shape
+// (top-level content) are scanned, because pass-through delivers whichever
+// format the caller requested. Missing fields and malformed bodies simply skip
+// detection.
 func (m *ContentErrorMatcher) DetectContentErrorInBody(body []byte) *ContentErrorMatchError {
 	if m.empty() || len(body) == 0 {
 		return nil
 	}
 
-	choices := gjson.GetBytes(body, "choices")
-	if !choices.IsArray() {
-		return nil
-	}
-
-	for _, choice := range choices.Array() {
+	for _, choice := range gjson.GetBytes(body, "choices").Array() {
 		for _, text := range jsonContentTexts(choice.Get("message.content")) {
 			if match := m.MatchContent(text); match != nil {
 				return match
 			}
+		}
+	}
+
+	// Anthropic Messages shape: top-level content as text blocks or a plain string.
+	for _, text := range jsonContentTexts(gjson.GetBytes(body, "content")) {
+		if match := m.MatchContent(text); match != nil {
+			return match
 		}
 	}
 

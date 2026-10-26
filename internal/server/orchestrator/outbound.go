@@ -44,6 +44,9 @@ type OutboundPersistentStream struct {
 	apiFormat      llm.APIFormat
 	perf           *biz.PerformanceRecord
 	responseChunks []*httpclient.StreamEvent
+	// contentErrorMatcher inspects the aggregated body once the stream ends; it is
+	// nil when content error detection is disabled.
+	contentErrorMatcher *pipeline.ContentErrorMatcher
 	// First reported model only. Intra-stream changes are not tracked.
 	upstreamModelID  string
 	terminalState    streamTerminalState
@@ -95,6 +98,9 @@ func NewOutboundPersistentStream(
 		state:           state,
 		terminalTracker: NewStreamTerminalTrackerForRequest(request),
 		consumerDone:    make(chan struct{}),
+	}
+	if state != nil {
+		s.contentErrorMatcher = state.ContentErrorDetection
 	}
 	if lifecycleOwner := streamLifecycleFromContext(ctx); lifecycleOwner != nil {
 		s.HoldFinalization()
@@ -276,7 +282,7 @@ func (ts *OutboundPersistentStream) finalizeClose() error {
 			log.String("terminal_state", string(ts.terminalState)))
 		ts.persistResponseChunks(ctx, ts.accountingSourceEnd(streamErr, ctxErr))
 
-		return ts.stream.Close()
+		return ts.finishFinalization()
 	}
 
 	var responseBody []byte
@@ -289,6 +295,11 @@ func (ts *OutboundPersistentStream) finalizeClose() error {
 		if ts.state != nil && aggErr == nil {
 			ts.state.AccountingFinal = meta.AccountingFinal(sourceEnd)
 			ts.state.AccountingSourceEnd = sourceEnd
+		}
+		if aggErr == nil {
+			// The aggregated body is the only complete view of what the client
+			// received, so content error detection runs here rather than per event.
+			ts.detectStreamContentError(ctx, responseBody)
 		}
 		aggregatedCompleted = aggErr == nil && len(responseBody) > 0 && meta.ID != "" && isCompletedAggregated(meta)
 		if ts.apiFormat == llm.APIFormatOpenAIChatCompletion && (streamErr != nil || ctxErr != nil) {
@@ -303,7 +314,6 @@ func (ts *OutboundPersistentStream) finalizeClose() error {
 				ts.outcome.observeAggregatedCompletion(true)
 			}
 			ts.markPerformanceTerminal(streamTerminalCompleted, "")
-			enqueueCompletedPerformance(ts.ctx, ts.state)
 		}
 	} else {
 		ts.logFinalizationDecision(ctx, "no_outbound_chunks_to_aggregate", streamErr, ctxErr, false, nil)
@@ -312,7 +322,6 @@ func (ts *OutboundPersistentStream) finalizeClose() error {
 		aggregatedCompleted = true
 		ts.outcome.observeValidatedCompletion()
 		ts.markPerformanceTerminal(streamTerminalCompleted, "")
-		enqueueCompletedPerformance(ts.ctx, ts.state)
 	}
 	if ts.outcome.hasFinalEvidence() {
 		ts.terminalState = ts.outcome.finalState()
@@ -330,7 +339,7 @@ func (ts *OutboundPersistentStream) finalizeClose() error {
 		ts.persistFailureChunks(persistCtx)
 		ts.persistExecutionFailure(persistCtx, decision.cause)
 
-		return ts.stream.Close()
+		return ts.finishFinalization()
 	}
 
 	if decision.state != streamTerminalCompleted {
@@ -344,7 +353,7 @@ func (ts *OutboundPersistentStream) finalizeClose() error {
 
 		ts.persistExecutionFailure(persistCtx, decision.cause)
 
-		return ts.stream.Close()
+		return ts.finishFinalization()
 	}
 
 	// Stream completed successfully - perform final persistence
@@ -360,6 +369,16 @@ func (ts *OutboundPersistentStream) finalizeClose() error {
 	} else {
 		ts.persistResponseChunks(ctx, sourceEnd)
 	}
+
+	return ts.finishFinalization()
+}
+
+// finishFinalization publishes the attempt's channel health and closes the
+// source. Publishing here (instead of when the stream is closed by its consumer)
+// keeps content error detection authoritative: the aggregated body is inspected
+// before the record reaches the metrics worker.
+func (ts *OutboundPersistentStream) finishFinalization() error {
+	enqueueCompletedPerformance(ts.ctx, ts.state)
 
 	return ts.stream.Close()
 }
@@ -439,6 +458,10 @@ func (ts *OutboundPersistentStream) persistResponseChunks(ctx context.Context, s
 			ts.state.AccountingSourceEnd = sourceEnd
 		}
 
+		// A terminal event already arrived, but the aggregated body is the only
+		// view of the delivered content, so it is inspected before persistence.
+		ts.detectStreamContentError(persistCtx, responseBody)
+
 		ts.persistAggregatedResponse(persistCtx, responseBody, meta, sourceEnd)
 	}
 }
@@ -486,6 +509,25 @@ func (ts *OutboundPersistentStream) persistExecutionFailure(ctx context.Context,
 		return
 	}
 
+	// Error content streamed before the client interrupted the response is a
+	// channel fault, not a client cancellation.
+	if ts.contentErrorDetected() {
+		err := ts.RequestService.UpdateRequestExecutionStatusWithMetrics(
+			ctx,
+			ts.requestExec.ID,
+			requestexecution.StatusFailed,
+			ts.terminalError,
+			nil,
+			ts.failureLatencyMetrics(),
+			ts.upstreamModelID,
+		)
+		if err != nil {
+			log.Warn(ctx, "Failed to update request execution status for content error", log.Cause(err))
+		}
+
+		return
+	}
+
 	err := persistRequestExecutionFailure(ctx, ts.RequestService, ts.requestExec.ID, rawErr, ts.failureLatencyMetrics(), ts.upstreamModelID)
 	if err != nil {
 		log.Warn(ctx, "Failed to update request execution status from error", log.Cause(err))
@@ -525,6 +567,10 @@ func (ts *OutboundPersistentStream) persistAggregatedResponse(ctx context.Contex
 	}
 
 	status := ts.terminalState.executionStatus()
+	if ts.contentErrorDetected() {
+		status = requestexecution.StatusFailed
+	}
+
 	err := ts.RequestService.UpdateRequestExecutionFinalized(
 		ctx,
 		ts.requestExec.ID,

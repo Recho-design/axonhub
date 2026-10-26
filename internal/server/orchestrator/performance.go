@@ -118,12 +118,12 @@ func (m *performanceRecording) OnOutboundRawStream(ctx context.Context, stream s
 }
 
 func (m *performanceRecording) OnOutboundLlmStream(ctx context.Context, stream streams.Stream[*llm.Response]) (streams.Stream[*llm.Response], error) {
+	// The record is published by outbound finalization, once the aggregated body
+	// has been inspected for content errors. Publishing on stream close would
+	// report the terminal-event success before that inspection runs.
 	return &recordPerformanceStream{
 		stream: stream,
 		state:  m.outbound.state,
-		onClose: func() {
-			enqueueCompletedPerformance(ctx, m.outbound.state)
-		},
 	}, nil
 }
 

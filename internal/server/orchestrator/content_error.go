@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 
@@ -95,4 +97,70 @@ func contentErrorDetectionMiddleware(
 
 		return nil, pipeline.WrapContentErrorMatch(match)
 	})
+}
+
+// streamContentErrorMessage builds the persisted failure reason for a stream
+// whose aggregated content matched an error pattern. The matched content is
+// deliberately excluded: it is already delivered to the client and belongs to
+// the response body, not to the request record.
+func streamContentErrorMessage(match *pipeline.ContentErrorMatchError) string {
+	return fmt.Sprintf(
+		"upstream streamed a 200 response containing error content (matched pattern: %q)",
+		match.Pattern,
+	)
+}
+
+// contentErrorDetected reports whether stream finalization already matched the
+// aggregated response body against the configured patterns.
+func (ts *OutboundPersistentStream) contentErrorDetected() bool {
+	return ts.state != nil && ts.state.ContentErrorMatched
+}
+
+// detectStreamContentError scans the aggregated stream body for configured error
+// patterns. A match fails the attempt for persistence and channel health without
+// touching the bytes already delivered and without scheduling a retry: streaming
+// retries only happen before the first event is committed, and a committed
+// attempt must not restart after the client saw the content. Automatic channel
+// disabling is intentionally left to the normal failure policy of the request.
+func (ts *OutboundPersistentStream) detectStreamContentError(ctx context.Context, body []byte) {
+	if ts.contentErrorMatcher == nil || ts.state == nil || len(body) == 0 || ts.contentErrorDetected() {
+		return
+	}
+
+	match := ts.contentErrorMatcher.DetectContentErrorInBody(body)
+	if match == nil {
+		return
+	}
+
+	fields := []log.Field{
+		log.String("pattern", match.Pattern),
+		log.Bool("regex", match.Regex),
+		log.String("content_preview", match.ContentPreview()),
+	}
+	if channel := ts.currentChannel(); channel != nil {
+		fields = append(fields, log.String("channel", channel.Name), log.Int("channel_id", channel.ID))
+	}
+	log.Warn(ctx, "stream response content matched an error pattern", fields...)
+
+	message := streamContentErrorMessage(match)
+	ts.terminalError = message
+	ts.state.ContentErrorMatched = true
+	ts.state.ContentErrorMessage = message
+
+	// The channel answered 200 and streamed error text as content, which is the
+	// same channel fault the non-streaming detection reports. Marking the record
+	// failed (instead of the success marked by the terminal event) is what the
+	// error-aware and round-robin health strategies observe.
+	if ts.perf != nil {
+		ts.perf.MarkFailedWithMessage(http.StatusBadGateway, message)
+	}
+}
+
+// currentChannel returns the channel of the attempt being finalized.
+func (ts *OutboundPersistentStream) currentChannel() *biz.Channel {
+	if ts.state == nil || ts.state.CurrentCandidate == nil {
+		return nil
+	}
+
+	return ts.state.CurrentCandidate.Channel
 }

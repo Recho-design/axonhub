@@ -243,10 +243,13 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 
 	var pipelineOpts []pipeline.Option
 
-	// Content error detection inspects non-streaming response content, so the
-	// matcher is only needed for that path; it holds pre-compiled regexes and is
-	// reused until the policy patterns change.
+	// Content error detection inspects response content, so the matcher is only
+	// needed when the detection is enabled; it holds pre-compiled regexes and is
+	// reused until the policy patterns change. Stream finalization receives it
+	// through the persistence state, because an aggregated stream is only complete
+	// once the source ends.
 	contentErrorMatcher := contentErrorMatcherFor(retryPolicy.ContentErrorDetection)
+	state.ContentErrorDetection = contentErrorMatcher
 
 	// Only apply retry if policy is enabled
 	if retryPolicy.Enabled {

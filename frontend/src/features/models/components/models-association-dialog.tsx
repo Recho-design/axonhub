@@ -6,6 +6,7 @@ import { IconPlus, IconTrash, IconChevronDown, IconChevronUp, IconInfoCircle } f
 import { useQueryModels } from '@/gql/models';
 import { useTranslation } from 'react-i18next';
 import { extractNumberIDAsNumber } from '@/lib/utils';
+import { goRegexValidationError } from '@/lib/go-regexp';
 import { useDebounce } from '@/hooks/use-debounce';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -329,9 +330,7 @@ function validateWhenConditionNode(
     });
   }
   if (condition.field === 'messages_text' && typeof condition.value === 'string' && condition.value !== '') {
-    try {
-      new RegExp(condition.value);
-    } catch {
+    if (goRegexValidationError(condition.value)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'Invalid regular expression',

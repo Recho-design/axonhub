@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { goRegexValidationError } from '@/lib/go-regexp';
 
 export type FilterBuilderFieldType = 'number' | 'string' | 'boolean';
 
@@ -465,11 +466,8 @@ function GroupEditor({
           const isRegexOperator = condition.operator === 'regex' || condition.operator === 'not_regex';
           let regexError: string | null = null;
           if (isRegexOperator && typeof condition.value === 'string' && condition.value.length > 0) {
-            try {
-              new RegExp(condition.value);
-            } catch (err: unknown) {
-              regexError = invalidRegexLabel || (err instanceof Error ? err.message : 'Invalid regular expression');
-            }
+            const error = goRegexValidationError(condition.value);
+            regexError = error ? invalidRegexLabel || error : null;
           }
           const valueControl =
             field.type === 'boolean' ? (

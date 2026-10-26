@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { goRegexValidationError } from '@/lib/go-regexp';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -161,13 +162,9 @@ export function RetrySettings() {
       if (formData.contentErrorDetection?.enabled) {
         const patterns = formData.contentErrorDetection.patterns || [];
         for (const item of patterns) {
-          if (item.regex && item.pattern.trim()) {
-            try {
-              new RegExp(item.pattern.trim());
-            } catch {
-              toast.error(t('system.retry.contentErrorDetection.patterns.hasInvalidRegex'));
-              return;
-            }
+          if (item.regex && goRegexValidationError(item.pattern)) {
+            toast.error(t('system.retry.contentErrorDetection.patterns.hasInvalidRegex'));
+            return;
           }
         }
       }

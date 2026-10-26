@@ -7,6 +7,7 @@ import (
 	"github.com/looplj/axonhub/internal/server/biz"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
+	"github.com/looplj/axonhub/llm/pipeline"
 )
 
 // PersistenceState holds shared state with channel management and retry capabilities.
@@ -24,6 +25,19 @@ type PersistenceState struct {
 	CandidateSelector   CandidateSelector
 	LoadBalancers       map[string]*LoadBalancer
 	RoutingPolicy       EffectiveRoutingPolicy
+
+	// ContentErrorDetection holds the compiled content error matcher of the retry
+	// policy. Stream finalization uses it to inspect the aggregated response body,
+	// because nothing upstream receives the whole body as one value.
+	ContentErrorDetection *pipeline.ContentErrorMatcher
+
+	// ContentErrorMatched records that the aggregated stream body matched a
+	// content error pattern. Outbound finalization sets it; inbound finalization
+	// reads it to fail the main request record.
+	ContentErrorMatched bool
+	// ContentErrorMessage carries the matched pattern for persisted records. It
+	// never contains the response content.
+	ContentErrorMessage string
 
 	// Request state
 	ModelMapper *ModelMapper
