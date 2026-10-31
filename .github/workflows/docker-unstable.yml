@@ -1,6 +1,9 @@
 name: Publish Docker image (unstable)
 
 on:
+  push:
+    branches:
+      - unstable
   workflow_dispatch:
 
 jobs:
