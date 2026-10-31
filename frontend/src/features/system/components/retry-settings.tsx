@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { RESPONSE_TIMEOUT_MAX_SECONDS } from '@/config/retry-policy';
 import { goRegexValidationError } from '@/lib/go-regexp';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -329,7 +330,7 @@ export function RetrySettings() {
                   id='max-single-channel-retries'
                   type='number'
                   min='0'
-                  max='5'
+                  max='10'
                   value={formData.maxSingleChannelRetries}
                   onChange={(e) => handleInputChange('maxSingleChannelRetries', parseInt(e.target.value) || 0)}
                   className='w-32'
@@ -365,7 +366,7 @@ export function RetrySettings() {
                       id='stream-first-event-timeout'
                       type='number'
                       min='0'
-                      max='600'
+                      max={RESPONSE_TIMEOUT_MAX_SECONDS}
                       value={formData.streamFirstEventTimeoutSeconds}
                       onChange={(e) => handleInputChange('streamFirstEventTimeoutSeconds', parseInt(e.target.value) || 0)}
                       className='w-32'
@@ -382,7 +383,7 @@ export function RetrySettings() {
                       id='non-stream-response-timeout'
                       type='number'
                       min='0'
-                      max='600'
+                      max={RESPONSE_TIMEOUT_MAX_SECONDS}
                       value={formData.nonStreamResponseTimeoutSeconds}
                       onChange={(e) => handleInputChange('nonStreamResponseTimeoutSeconds', parseInt(e.target.value) || 0)}
                       className='w-32'
