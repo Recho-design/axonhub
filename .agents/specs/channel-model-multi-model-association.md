@@ -12,7 +12,7 @@
 1. **存储契约**:`ChannelModelAssociation = { ChannelID int, ModelIDs []string }`,JSON 键 `modelIds`。读路径兼容旧 `modelId` 单值:自定义 `UnmarshalJSON` 在 `modelIds` 为空且 `modelId` 非空时归一为单元素数组;两者并存时 `modelIds` 优先。Marshal 只输出 `modelIds`(旧数据下次保存时自动迁移,无需 SQL migration)。
 2. **匹配语义**:matcher 按 `ModelIDs` 顺序在 `GetModelEntries()`(键为 RequestModel)逐个查找,按 `(channelID, modelID)` tracker 去重,命中多个进入同一 connection 的 `Models`;全部缺失则该规则无连接(静默跳过,不报错)。
 3. **开发者设置**:写系统设置时清空 `ModelIDs = nil`;继承时填充 `[]string{modelID}`。缓存签名用 `writeStringSliceSignature`(nil 与空切片签名相同,不会误失效)。
-4. **GraphQL**:`model.graphql` 中 type 与 input 均为 `modelIds: [String!]!`;gqlgen 绑定不变。**注意**:仓库 HEAD 上 `go generate` 因 `dashboard.resolvers.go` 存量问题(follow-schema 重写丢私有辅助函数)本来就会失败,与 schema 改动无关;单独运行 `cd internal/server/gql && go run ../gqlgen/generate.go` 可生成,生成后 `git checkout` 还原被误改的 resolver 文件,并核对 generated.go 两次生成 sha256 一致。
+4. **GraphQL**:`model.graphql` 中 type 与 input 均为 `modelIds: [String!]!`;gqlgen 绑定不变。**注**:`go generate` 曾因 `dashboard.resolvers.go` 存量问题(follow-schema 重写丢私有辅助函数)在旧 HEAD 上失败;上游 `deaa6b49`(fix(gql): preserve dashboard helpers during generation)已将辅助函数挪入 `dashboard_helpers.go` 修复,2026-11-04 合并进 fork 后 `go generate` 可正常使用。
 5. **前端多选控件**:`TagsAutocompleteInput` 新增 `strict` / `emptyMessage` props(默认 false,不影响渠道标签等自由输入场景)。strict 模式仅接受建议列表中的精确(大小写不敏感)匹配,回车/逗号/失焦不会把未确认搜索词写入值;渠道变更时必须清空 `modelIds`(在 channelId 的 onSelectedValueChange 中同步 setValue,不用 useEffect)。
 6. **已接受风险**:绕过 UI 直接调 GraphQL 可写入空 `modelIds` / 未知渠道,matcher 会安全跳过,不加服务端校验(管理员 API,过度防御)。
 
