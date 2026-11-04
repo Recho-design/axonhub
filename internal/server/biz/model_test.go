@@ -87,7 +87,7 @@ func TestModelService_QueryModelChannelConnections(t *testing.T) {
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: 1,
-					ModelID:   "gpt-4",
+					ModelIDs:  []string{"gpt-4"},
 				},
 			},
 		}
@@ -105,7 +105,7 @@ func TestModelService_QueryModelChannelConnections(t *testing.T) {
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: 1,
-					ModelID:   "non-existent-model",
+					ModelIDs:  []string{"non-existent-model"},
 				},
 			},
 		}
@@ -164,7 +164,7 @@ func TestModelService_QueryModelChannelConnections(t *testing.T) {
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: channel1.ID,
-					ModelID:   "gpt-4",
+					ModelIDs:  []string{"gpt-4"},
 				},
 			},
 			{
@@ -206,7 +206,7 @@ func TestModelService_QueryModelChannelConnections(t *testing.T) {
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: channel1.ID,
-					ModelID:   "gpt-4",
+					ModelIDs:  []string{"gpt-4"},
 				},
 			},
 		}
@@ -260,7 +260,7 @@ func TestModelService_QueryModelChannelConnections(t *testing.T) {
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: disabledChannel.ID,
-					ModelID:   "gpt-4-disabled",
+					ModelIDs:  []string{"gpt-4-disabled"},
 				},
 			},
 		}
@@ -322,7 +322,7 @@ func TestModelService_QueryModelChannelConnections(t *testing.T) {
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: channel1.ID,
-					ModelID:   "gpt-4",
+					ModelIDs:  []string{"gpt-4"},
 				},
 			},
 			{
@@ -348,21 +348,21 @@ func TestModelService_QueryModelChannelConnections(t *testing.T) {
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: channel1.ID,
-					ModelID:   "gpt-4",
+					ModelIDs:  []string{"gpt-4"},
 				},
 			},
 			{
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: channel2.ID,
-					ModelID:   "claude-3-opus",
+					ModelIDs:  []string{"claude-3-opus"},
 				},
 			},
 			{
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: channel1.ID,
-					ModelID:   "gpt-3.5-turbo",
+					ModelIDs:  []string{"gpt-3.5-turbo"},
 				},
 			},
 		}
@@ -388,21 +388,21 @@ func TestModelService_QueryModelChannelConnections(t *testing.T) {
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: channel1.ID,
-					ModelID:   "gpt-3.5-turbo",
+					ModelIDs:  []string{"gpt-3.5-turbo"},
 				},
 			},
 			{
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: channel1.ID,
-					ModelID:   "gpt-4-turbo",
+					ModelIDs:  []string{"gpt-4-turbo"},
 				},
 			},
 			{
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: channel1.ID,
-					ModelID:   "gpt-4",
+					ModelIDs:  []string{"gpt-4"},
 				},
 			},
 		}
@@ -1219,7 +1219,7 @@ func TestModelService_ListEnabledModels(t *testing.T) {
 						Type: "channel_model",
 						ChannelModel: &objects.ChannelModelAssociation{
 							ChannelID: firstChannelID,
-							ModelID:   "gpt-4",
+							ModelIDs:  []string{"gpt-4"},
 						},
 					},
 				},
@@ -1242,7 +1242,7 @@ func TestModelService_ListEnabledModels(t *testing.T) {
 						Type: "channel_model",
 						ChannelModel: &objects.ChannelModelAssociation{
 							ChannelID: firstChannelID,
-							ModelID:   "gpt-3.5-turbo",
+							ModelIDs:  []string{"gpt-3.5-turbo"},
 						},
 					},
 				},
@@ -1897,7 +1897,7 @@ func TestFindUnassociatedChannels(t *testing.T) {
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: 1,
-					ModelID:   "gpt-4",
+					ModelIDs:  []string{"gpt-4"},
 				},
 			},
 		}

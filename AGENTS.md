@@ -89,3 +89,4 @@ Implementation conventions distilled from Heavy tasks live in `.agents/specs/`:
 | File | Scope | Description |
 |------|-------|-------------|
 | [model-level-channel-health.md](.agents/specs/model-level-channel-health.md) | `internal/server/biz/channel_metrics.go`, `internal/server/orchestrator/**` | 模型级渠道健康键、候选重排、AttemptSeq 所有权 |
+| [channel-model-multi-model-association.md](.agents/specs/channel-model-multi-model-association.md) | `internal/objects/model.go`, `internal/server/biz/**`, `frontend/src/features/models/**` | channel_model 多模型 modelIds 存储契约、兼容归一、strict 多选控件 |

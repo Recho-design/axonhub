@@ -879,7 +879,7 @@ const MODEL_SETTINGS_QUERY = `
           }
           channelModel {
             channelId
-            modelId
+            modelIds
           }
           channelRegex {
             channelId

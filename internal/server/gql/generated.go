@@ -420,7 +420,7 @@ type ComplexityRoot struct {
 
 	ChannelModelAssociation struct {
 		ChannelID func(childComplexity int) int
-		ModelID   func(childComplexity int) int
+		ModelIDs  func(childComplexity int) int
 	}
 
 	ChannelModelAutoSyncSetting struct {
@@ -3935,12 +3935,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.ChannelModelAssociation.ChannelID(childComplexity), true
-	case "ChannelModelAssociation.modelId":
-		if e.complexity.ChannelModelAssociation.ModelID == nil {
+	case "ChannelModelAssociation.modelIds":
+		if e.complexity.ChannelModelAssociation.ModelIDs == nil {
 			break
 		}
 
-		return e.complexity.ChannelModelAssociation.ModelID(childComplexity), true
+		return e.complexity.ChannelModelAssociation.ModelIDs(childComplexity), true
 
 	case "ChannelModelAutoSyncSetting.frequency":
 		if e.complexity.ChannelModelAutoSyncSetting.Frequency == nil {
@@ -22862,23 +22862,23 @@ func (ec *executionContext) fieldContext_ChannelModelAssociation_channelId(_ con
 	return fc, nil
 }
 
-func (ec *executionContext) _ChannelModelAssociation_modelId(ctx context.Context, field graphql.CollectedField, obj *objects.ChannelModelAssociation) (ret graphql.Marshaler) {
+func (ec *executionContext) _ChannelModelAssociation_modelIds(ctx context.Context, field graphql.CollectedField, obj *objects.ChannelModelAssociation) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
-		ec.fieldContext_ChannelModelAssociation_modelId,
+		ec.fieldContext_ChannelModelAssociation_modelIds,
 		func(ctx context.Context) (any, error) {
-			return obj.ModelID, nil
+			return obj.ModelIDs, nil
 		},
 		nil,
-		ec.marshalNString2string,
+		ec.marshalNString2ᚕstringᚄ,
 		true,
 		true,
 	)
 }
 
-func (ec *executionContext) fieldContext_ChannelModelAssociation_modelId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_ChannelModelAssociation_modelIds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "ChannelModelAssociation",
 		Field:      field,
@@ -31869,8 +31869,8 @@ func (ec *executionContext) fieldContext_ModelAssociation_channelModel(_ context
 			switch field.Name {
 			case "channelId":
 				return ec.fieldContext_ChannelModelAssociation_channelId(ctx, field)
-			case "modelId":
-				return ec.fieldContext_ChannelModelAssociation_modelId(ctx, field)
+			case "modelIds":
+				return ec.fieldContext_ChannelModelAssociation_modelIds(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ChannelModelAssociation", field.Name)
 		},
@@ -68981,7 +68981,7 @@ func (ec *executionContext) unmarshalInputChannelModelAssociationInput(ctx conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"channelId", "modelId"}
+	fieldsInOrder := [...]string{"channelId", "modelIds"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -68995,13 +68995,13 @@ func (ec *executionContext) unmarshalInputChannelModelAssociationInput(ctx conte
 				return it, err
 			}
 			it.ChannelID = data
-		case "modelId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("modelId"))
-			data, err := ec.unmarshalNString2string(ctx, v)
+		case "modelIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("modelIds"))
+			data, err := ec.unmarshalNString2ᚕstringᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.ModelID = data
+			it.ModelIDs = data
 		}
 	}
 
@@ -97249,8 +97249,8 @@ func (ec *executionContext) _ChannelModelAssociation(ctx context.Context, sel as
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "modelId":
-			out.Values[i] = ec._ChannelModelAssociation_modelId(ctx, field, obj)
+		case "modelIds":
+			out.Values[i] = ec._ChannelModelAssociation_modelIds(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

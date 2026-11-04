@@ -47,7 +47,7 @@ func TestDefaultSelector_ModelHealthReordersMultiModelCandidate(t *testing.T) {
 					Priority: 1,
 					ChannelModel: &objects.ChannelModelAssociation{
 						ChannelID: ch.ID,
-						ModelID:   "gptb",
+						ModelIDs:  []string{"gptb"},
 					},
 				},
 				{
@@ -55,7 +55,7 @@ func TestDefaultSelector_ModelHealthReordersMultiModelCandidate(t *testing.T) {
 					Priority: 1,
 					ChannelModel: &objects.ChannelModelAssociation{
 						ChannelID: ch.ID,
-						ModelID:   "gpta",
+						ModelIDs:  []string{"gpta"},
 					},
 				},
 			},

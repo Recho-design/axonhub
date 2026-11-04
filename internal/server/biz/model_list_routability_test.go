@@ -128,14 +128,14 @@ func TestListEnabledModels_HideUnroutableModelsInList(t *testing.T) {
 		Type: "channel_model",
 		ChannelModel: &objects.ChannelModelAssociation{
 			ChannelID: chatChannel.ID,
-			ModelID:   "routable-chat",
+			ModelIDs:  []string{"routable-chat"},
 		},
 	})
 	createConfiguredModel(t, ctx, client, "unroutable-embedding", model.TypeEmbedding, &objects.ModelAssociation{
 		Type: "channel_model",
 		ChannelModel: &objects.ChannelModelAssociation{
 			ChannelID: responsesChannel.ID,
-			ModelID:   "unroutable-embedding",
+			ModelIDs:  []string{"unroutable-embedding"},
 		},
 	})
 
@@ -191,7 +191,7 @@ func TestListEnabledModels_HideUnroutableRespectsExcludedProjectTags(t *testing.
 		Type: "channel_model",
 		ChannelModel: &objects.ChannelModelAssociation{
 			ChannelID: excludedChannel.ID,
-			ModelID:   "tagged-only-model",
+			ModelIDs:  []string{"tagged-only-model"},
 		},
 	})
 
@@ -274,7 +274,7 @@ func TestListEnabledModels_HideUnroutableDoesNotUseWhenConditions(t *testing.T) 
 		Type: "channel_model",
 		ChannelModel: &objects.ChannelModelAssociation{
 			ChannelID: ch.ID,
-			ModelID:   "when-model",
+			ModelIDs:  []string{"when-model"},
 		},
 		When: &objects.ModelAssociationWhen{
 			Enabled: true,

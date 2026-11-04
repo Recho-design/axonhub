@@ -180,7 +180,7 @@ func TestDefaultSelector_Select_DeduplicateAcrossConditionalAssociationsByActual
 					},
 					ChannelModel: &objects.ChannelModelAssociation{
 						ChannelID: ch.ID,
-						ModelID:   "gpt-4",
+						ModelIDs:  []string{"gpt-4"},
 					},
 				},
 				{
@@ -191,7 +191,7 @@ func TestDefaultSelector_Select_DeduplicateAcrossConditionalAssociationsByActual
 					},
 					ChannelModel: &objects.ChannelModelAssociation{
 						ChannelID: ch.ID,
-						ModelID:   "gpt4",
+						ModelIDs:  []string{"gpt4"},
 					},
 				},
 			},
@@ -259,7 +259,7 @@ func TestDefaultSelector_Select_ConditionalMismatchKeepsDuplicateFallback(t *tes
 					},
 					ChannelModel: &objects.ChannelModelAssociation{
 						ChannelID: ch.ID,
-						ModelID:   "gpt-4",
+						ModelIDs:  []string{"gpt-4"},
 					},
 				},
 				{
@@ -267,7 +267,7 @@ func TestDefaultSelector_Select_ConditionalMismatchKeepsDuplicateFallback(t *tes
 					Priority: 1,
 					ChannelModel: &objects.ChannelModelAssociation{
 						ChannelID: ch.ID,
-						ModelID:   "gpt-4",
+						ModelIDs:  []string{"gpt-4"},
 					},
 				},
 			},

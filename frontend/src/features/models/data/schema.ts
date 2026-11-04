@@ -50,7 +50,7 @@ export type ModelCard = z.infer<typeof modelCardSchema>;
 
 export const channelModelAssociationSchema = z.object({
   channelId: z.number(),
-  modelId: z.string(),
+  modelIds: z.array(z.string()),
 });
 export type ChannelModelAssociation = z.infer<typeof channelModelAssociationSchema>;
 

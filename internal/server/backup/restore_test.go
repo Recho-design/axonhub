@@ -213,7 +213,7 @@ func TestBackupService_Restore_RemapChannelIDsInModelSettingsAndAPIKeyProfiles(t
 								Priority: 0,
 								ChannelModel: &objects.ChannelModelAssociation{
 									ChannelID: oldChannelID,
-									ModelID:   "gpt-4",
+									ModelIDs:  []string{"gpt-4"},
 								},
 								Regex: &objects.RegexAssociation{
 									Pattern: ".*",

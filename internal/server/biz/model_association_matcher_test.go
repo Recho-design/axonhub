@@ -56,7 +56,7 @@ func TestMatchAssociations_Deduplication(t *testing.T) {
 				Priority: 1,
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: 1,
-					ModelID:   "gpt-4",
+					ModelIDs:  []string{"gpt-4"},
 				},
 			},
 			{
@@ -64,7 +64,7 @@ func TestMatchAssociations_Deduplication(t *testing.T) {
 				Priority: 2,
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: 1,
-					ModelID:   "gpt-4",
+					ModelIDs:  []string{"gpt-4"},
 				},
 			},
 		}
@@ -75,6 +75,53 @@ func TestMatchAssociations_Deduplication(t *testing.T) {
 		require.Len(t, result[0].Models, 1)
 		require.Equal(t, "gpt-4", result[0].Models[0].RequestModel)
 		require.Equal(t, 1, result[0].Priority, "should use first association's priority")
+	})
+
+	t.Run("multiple models in one channel association", func(t *testing.T) {
+		associations := []*objects.ModelAssociation{
+			{
+				Type:     "channel_model",
+				Priority: 1,
+				ChannelModel: &objects.ChannelModelAssociation{
+					ChannelID: 1,
+					ModelIDs:  []string{"gpt-4", "gpt-3.5-turbo", "missing-model"},
+				},
+			},
+		}
+
+		result := MatchConnections(associations, channels)
+		require.Len(t, result, 1)
+		require.Equal(t, 1, result[0].Channel.ID)
+		require.Len(t, result[0].Models, 2)
+		require.Equal(t, "gpt-4", result[0].Models[0].RequestModel)
+		require.Equal(t, "gpt-3.5-turbo", result[0].Models[1].RequestModel)
+	})
+
+	t.Run("channel_model deduplicates models matched by earlier association", func(t *testing.T) {
+		associations := []*objects.ModelAssociation{
+			{
+				Type:     "channel_model",
+				Priority: 1,
+				ChannelModel: &objects.ChannelModelAssociation{
+					ChannelID: 1,
+					ModelIDs:  []string{"gpt-4"},
+				},
+			},
+			{
+				Type:     "channel_model",
+				Priority: 2,
+				ChannelModel: &objects.ChannelModelAssociation{
+					ChannelID: 1,
+					ModelIDs:  []string{"gpt-4", "gpt-3.5-turbo"},
+				},
+			},
+		}
+
+		result := MatchConnections(associations, channels)
+		require.Len(t, result, 2)
+		require.Len(t, result[0].Models, 1)
+		require.Len(t, result[1].Models, 1)
+		require.Equal(t, "gpt-3.5-turbo", result[1].Models[0].RequestModel)
 	})
 
 	t.Run("different channels same model should not duplicate", func(t *testing.T) {
@@ -113,7 +160,7 @@ func TestMatchAssociations_Deduplication(t *testing.T) {
 				Priority: 2,
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: 1,
-					ModelID:   "gpt-4",
+					ModelIDs:  []string{"gpt-4"},
 				},
 			},
 		}
@@ -185,7 +232,7 @@ func TestMatchAssociations_EmptyConnectionFiltering(t *testing.T) {
 				Priority: 1,
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: 1,
-					ModelID:   "gpt-4",
+					ModelIDs:  []string{"gpt-4"},
 				},
 			},
 			{
@@ -211,7 +258,7 @@ func TestMatchAssociations_EmptyConnectionFiltering(t *testing.T) {
 				Priority: 1,
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: 999,
-					ModelID:   "non-existent",
+					ModelIDs:  []string{"non-existent"},
 				},
 			},
 		}
@@ -255,7 +302,7 @@ func TestMatchAssociations_ComplexScenario(t *testing.T) {
 			Priority: 1,
 			ChannelModel: &objects.ChannelModelAssociation{
 				ChannelID: 1,
-				ModelID:   "gpt-4",
+				ModelIDs:  []string{"gpt-4"},
 			},
 		},
 		{
@@ -932,7 +979,7 @@ func TestMatchAssociations_ChannelTagsModel(t *testing.T) {
 				Priority: 1,
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: 1,
-					ModelID:   "gpt-4",
+					ModelIDs:  []string{"gpt-4"},
 				},
 			},
 			{

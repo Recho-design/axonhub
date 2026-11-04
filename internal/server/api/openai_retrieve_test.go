@@ -174,7 +174,7 @@ func TestOpenAIHandlers_RetrieveModel_ReturnsExtendedConfiguredModel(t *testing.
 					Type: "channel_model",
 					ChannelModel: &objects.ChannelModelAssociation{
 						ChannelID: ch.ID,
-						ModelID:   "gpt-4.1",
+						ModelIDs:  []string{"gpt-4.1"},
 					},
 				},
 			},
@@ -253,7 +253,7 @@ func TestOpenAIHandlers_RetrieveModel_ReturnsEmptyModalitiesWhenZeroValue(t *tes
 					Type: "channel_model",
 					ChannelModel: &objects.ChannelModelAssociation{
 						ChannelID: ch.ID,
-						ModelID:   "gpt-4.1",
+						ModelIDs:  []string{"gpt-4.1"},
 					},
 				},
 			},
@@ -337,7 +337,7 @@ func TestOpenAIHandlers_ListModels_UsesBasicFieldsByDefault(t *testing.T) {
 					Type: "channel_model",
 					ChannelModel: &objects.ChannelModelAssociation{
 						ChannelID: ch.ID,
-						ModelID:   "gpt-4.1",
+						ModelIDs:  []string{"gpt-4.1"},
 					},
 				},
 			},
@@ -412,7 +412,7 @@ func TestOpenAIHandlers_ListModels_UsesExtendedFieldsWhenConfiguredAsDefault(t *
 					Type: "channel_model",
 					ChannelModel: &objects.ChannelModelAssociation{
 						ChannelID: ch.ID,
-						ModelID:   "gpt-4.1",
+						ModelIDs:  []string{"gpt-4.1"},
 					},
 				},
 			},
@@ -498,7 +498,7 @@ func TestOpenAIHandlers_ListModels_ExtendedModeRespectsAPIKeyProfile(t *testing.
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: openaiCh.ID,
-					ModelID:   "gpt-4.1",
+					ModelIDs:  []string{"gpt-4.1"},
 				},
 			}},
 		}).
@@ -524,7 +524,7 @@ func TestOpenAIHandlers_ListModels_ExtendedModeRespectsAPIKeyProfile(t *testing.
 				Type: "channel_model",
 				ChannelModel: &objects.ChannelModelAssociation{
 					ChannelID: anthropicCh.ID,
-					ModelID:   "claude-3-opus-20240229",
+					ModelIDs:  []string{"claude-3-opus-20240229"},
 				},
 			}},
 		}).
@@ -623,7 +623,7 @@ func TestOpenAIHandlers_ListModels_ExtendedModeFallsBackToBasicForMissingDBModel
 		SetSettings(&objects.ModelSettings{
 			Associations: []*objects.ModelAssociation{{
 				Type:         "channel_model",
-				ChannelModel: &objects.ChannelModelAssociation{ChannelID: openaiCh.ID, ModelID: "gpt-4.1"},
+				ChannelModel: &objects.ChannelModelAssociation{ChannelID: openaiCh.ID, ModelIDs: []string{"gpt-4.1"}},
 			}},
 		}).
 		SetStatus(model.StatusEnabled).

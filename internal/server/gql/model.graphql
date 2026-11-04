@@ -63,7 +63,7 @@ type ModelAssociationWhen {
 
 type ChannelModelAssociation {
   channelId: Int!
-  modelId: String!
+  modelIds: [String!]!
 }
 
 type ChannelRegexAssociation {
@@ -161,7 +161,7 @@ input ModelAssociationWhenInput {
 
 input ChannelModelAssociationInput {
   channelId: Int!
-  modelId: String!
+  modelIds: [String!]!
 }
 
 input ChannelRegexAssociationInput {

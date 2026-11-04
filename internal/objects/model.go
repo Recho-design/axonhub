@@ -1,5 +1,7 @@
 package objects
 
+import "encoding/json"
+
 type ModelCardReasoning struct {
 	Supported bool `json:"supported"`
 	Default   bool `json:"default"`
@@ -94,8 +96,31 @@ type ExcludeAssociation struct {
 }
 
 type ChannelModelAssociation struct {
-	ChannelID int    `json:"channelId"`
-	ModelID   string `json:"modelId"`
+	ChannelID int      `json:"channelId"`
+	ModelIDs  []string `json:"modelIds"`
+}
+
+// UnmarshalJSON accepts both the legacy single model ID (modelId) and the
+// multi-model form (modelIds). A non-empty legacy modelId is normalized into a
+// one-element ModelIDs slice so stored model settings keep working after
+// upgrade; when both keys are present, modelIds wins.
+func (a *ChannelModelAssociation) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		ChannelID int      `json:"channelId"`
+		ModelID   string   `json:"modelId"`
+		ModelIDs  []string `json:"modelIds"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	a.ChannelID = raw.ChannelID
+	a.ModelIDs = raw.ModelIDs
+	if len(a.ModelIDs) == 0 && raw.ModelID != "" {
+		a.ModelIDs = []string{raw.ModelID}
+	}
+
+	return nil
 }
 
 type ChannelRegexAssociation struct {

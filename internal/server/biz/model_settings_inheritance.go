@@ -69,7 +69,7 @@ func normalizeDeveloperAssociations(associations []*objects.ModelAssociation) {
 		switch assoc.Type {
 		case "channel_model":
 			if assoc.ChannelModel != nil {
-				assoc.ChannelModel.ModelID = ""
+				assoc.ChannelModel.ModelIDs = nil
 			}
 		case "channel_tags_model":
 			if assoc.ChannelTagsModel != nil {
@@ -175,7 +175,7 @@ func inheritDeveloperAssociationForModel(assoc *objects.ModelAssociation, modelI
 		if inherited.ChannelModel == nil {
 			return nil
 		}
-		inherited.ChannelModel.ModelID = modelID
+		inherited.ChannelModel.ModelIDs = []string{modelID}
 	case "channel_tags_model":
 		if inherited.ChannelTagsModel == nil {
 			return nil

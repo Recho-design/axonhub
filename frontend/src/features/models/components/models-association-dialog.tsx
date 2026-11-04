@@ -417,6 +417,7 @@ const associationFormSchema = z.object({
         channelId: z.number().optional(),
         channelTags: z.array(z.string()).optional(),
         modelId: z.string().optional(),
+        modelIds: z.array(z.string()).default([]),
         pattern: z.string().optional(),
         excludeChannelNamePattern: z.string().optional(),
         excludeChannelIds: z.array(z.number()).optional(),
@@ -451,7 +452,16 @@ const associationFormSchema = z.object({
             });
           }
         }
-        if (assoc.type === 'channel_model' || assoc.type === 'model' || assoc.type === 'channel_tags_model') {
+        if (assoc.type === 'channel_model') {
+          if (!assoc.inheritModel && (!assoc.modelIds || assoc.modelIds.length === 0)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: 'Model ID is required',
+              path: [index, 'modelIds'],
+            });
+          }
+        }
+        if (assoc.type === 'model' || assoc.type === 'channel_tags_model') {
           if (!assoc.inheritModel && (!assoc.modelId || assoc.modelId.trim() === '')) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
@@ -498,7 +508,7 @@ function associationModelID(assoc: AssociationFormRow, inheritedModelID?: string
 
 function isCompleteAssociationFormRow(assoc: AssociationFormRow, inheritedModelID?: string) {
   if (assoc.type === 'channel_model') {
-    return Boolean(assoc.channelId && (associationModelID(assoc, inheritedModelID) || assoc.inheritModel));
+    return Boolean(assoc.channelId && (assoc.inheritModel || (assoc.modelIds && assoc.modelIds.length > 0)));
   }
   if (assoc.type === 'channel_regex') {
     return Boolean(assoc.channelId && assoc.pattern);
@@ -555,7 +565,9 @@ function formAssociationToInput(assoc: AssociationFormRow, inheritedModelID?: st
       type: 'channel_model',
       channelModel: {
         channelId: assoc.channelId!,
-        modelId: modelID,
+        modelIds: assoc.inheritModel
+          ? (inheritedModelID ? [inheritedModelID] : [])
+          : (assoc.modelIds || []),
       },
     };
   }
@@ -634,7 +646,7 @@ function modelAssociationToInput(assoc: ModelAssociation, inheritedModelID?: str
   const channelModel = assoc.channelModel
     ? {
         ...assoc.channelModel,
-        modelId: inheritedModelID ?? assoc.channelModel.modelId,
+        modelIds: inheritedModelID ? [inheritedModelID] : (assoc.channelModel.modelIds || []),
       }
     : undefined;
   const modelId = assoc.modelId
@@ -684,7 +696,8 @@ function modelAssociationToFormRow(assoc: ModelAssociation, inheritModel = false
         : promptTokensCondition.condition,
     channelId: assoc.channelModel?.channelId || assoc.channelRegex?.channelId,
     channelTags: assoc.channelTagsModel?.channelTags || assoc.channelTagsRegex?.channelTags || [],
-    modelId: inheritModel ? '' : assoc.channelModel?.modelId || assoc.modelId?.modelId || assoc.channelTagsModel?.modelId,
+    modelId: inheritModel ? '' : assoc.modelId?.modelId || assoc.channelTagsModel?.modelId || '',
+    modelIds: inheritModel ? [] : assoc.channelModel?.modelIds || [],
     pattern: assoc.channelRegex?.pattern || assoc.regex?.pattern || assoc.channelTagsRegex?.pattern,
     excludeChannelNamePattern: exclude?.channelNamePattern || '',
     excludeChannelIds: exclude?.channelIds || [],
@@ -974,6 +987,7 @@ export function ModelsAssociationDialog() {
       channelId: undefined,
       channelTags: [],
       modelId: '',
+      modelIds: [],
       pattern: '',
       excludeChannelNamePattern: '',
       excludeChannelIds: [],
@@ -1380,6 +1394,7 @@ function AssociationRow({ index, form, isDeveloperMode, channelOptions, allModel
   const channelId = form.watch(`associations.${index}.channelId`);
   const channelTags = form.watch(`associations.${index}.channelTags`);
   const modelId = form.watch(`associations.${index}.modelId`);
+  const modelIds = form.watch(`associations.${index}.modelIds`);
   const pattern = form.watch(`associations.${index}.pattern`);
   const excludeChannelIds = form.watch(`associations.${index}.excludeChannelIds`);
   const excludeChannelNamePattern = form.watch(`associations.${index}.excludeChannelNamePattern`);
@@ -1448,6 +1463,27 @@ function AssociationRow({ index, form, isDeveloperMode, channelOptions, allModel
       label: entry.requestModel,
     }));
   }, [channelId, channelOptions, allModelOptions, showModel, type]);
+
+  const channelModelSuggestions = useMemo(() => {
+    return Array.from(new Set(modelOptions.map((opt) => opt.value)));
+  }, [modelOptions]);
+
+  // Guide the user through the channel_model multi-select: pick a channel
+  // first, then be told when the chosen channel exposes no models.
+  const channelModelMessages = useMemo(() => {
+    if (!channelId) {
+      const hint = t('models.dialogs.association.selectChannelFirst');
+      return { placeholder: hint, emptyMessage: hint };
+    }
+    if (channelModelSuggestions.length === 0) {
+      const hint = t('models.dialogs.association.noChannelModelsAvailable');
+      return { placeholder: hint, emptyMessage: hint };
+    }
+    return {
+      placeholder: t('models.dialogs.association.selectModel'),
+      emptyMessage: t('models.dialogs.association.noModelsAvailable'),
+    };
+  }, [channelId, channelModelSuggestions.length, t]);
 
   return (
     <div className={`flex flex-col gap-3 rounded-lg border p-3 ${disabled ? 'opacity-50' : ''}`}>
@@ -1519,7 +1555,17 @@ function AssociationRow({ index, form, isDeveloperMode, channelOptions, allModel
                 <FormControl>
                   <AutoCompleteSelect
                     selectedValue={field.value?.toString() || ''}
-                    onSelectedValueChange={(value) => field.onChange(Number(value))}
+                    onSelectedValueChange={(value) => {
+                      const newChannelId = value ? Number(value) : undefined;
+                      const prevChannelId = field.value;
+                      field.onChange(newChannelId);
+                      if (type === 'channel_model' && newChannelId !== prevChannelId) {
+                        form.setValue(`associations.${index}.modelIds`, [], {
+                          shouldValidate: true,
+                          shouldDirty: true,
+                        });
+                      }
+                    }}
                     items={channelOptions.map((opt) => ({ value: opt.value.toString(), label: opt.label }))}
                     placeholder={t('models.dialogs.association.selectChannel')}
                     emptyMessage={t('models.dialogs.association.noModelsAvailable')}
@@ -1616,27 +1662,21 @@ function AssociationRow({ index, form, isDeveloperMode, channelOptions, allModel
           {showModel && (
             <FormField
               control={form.control}
-              name={`associations.${index}.modelId`}
-              render={({ field }) => (
+              name={`associations.${index}.modelIds`}
+              render={({ field, fieldState }) => (
                 <FormItem className='min-w-0 gap-0'>
                   <FormControl>
-                    <AutoComplete
-                      selectedValue={field.value?.toString() || ''}
-                      onSelectedValueChange={(value) => {
-                        field.onChange(value);
-                      }}
-                      searchValue={modelSearch}
-                      onSearchValueChange={setModelSearch}
-                      items={modelOptions}
-                      placeholder={t('models.dialogs.association.selectModel')}
-                      emptyMessage={
-                        modelOptions.length === 0 && channelId
-                          ? t('models.dialogs.association.noChannelModelsAvailable')
-                          : t('models.dialogs.association.selectChannelFirst')
-                      }
-                      portalContainer={portalContainer}
+                    <TagsAutocompleteInput
+                      value={field.value || []}
+                      onChange={field.onChange}
+                      placeholder={channelModelMessages.placeholder}
+                      emptyMessage={channelModelMessages.emptyMessage}
+                      suggestions={channelModelSuggestions}
+                      strict={true}
+                      className='h-auto min-h-10 sm:min-h-9 py-1'
                     />
                   </FormControl>
+                  {fieldState.error && <FormMessage>{fieldState.error.message}</FormMessage>}
                 </FormItem>
               )}
             />
@@ -1900,9 +1940,9 @@ function AssociationRow({ index, form, isDeveloperMode, channelOptions, allModel
             });
           } else if (isDeveloperMode && type === 'channel_tags_model' && channelTags && channelTags.length > 0) {
             hint = t('models.dialogs.association.developerRuleHints.channelTags', { tags: channelTags.join(', ') });
-          } else if (type === 'channel_model' && channelId && modelId) {
+          } else if (type === 'channel_model' && channelId && modelIds && modelIds.length > 0) {
             hint = t('models.dialogs.association.ruleHints.channelModel', {
-              model: modelId,
+              model: modelIds.join(', '),
               channel: selectedChannel?.label || channelId.toString(),
             });
           } else if (type === 'channel_regex' && channelId && pattern) {

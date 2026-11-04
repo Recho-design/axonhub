@@ -16,16 +16,17 @@ interface TagsAutocompleteInputProps {
   className?: string;
   suggestions?: string[];
   isLoading?: boolean;
+  strict?: boolean;
+  emptyMessage?: string;
 }
 
 export const TagsAutocompleteInput = forwardRef<HTMLDivElement, TagsAutocompleteInputProps>(
-  ({ value = [], onChange, placeholder, className, suggestions = [], isLoading }, ref) => {
+  ({ value = [], onChange, placeholder, className, suggestions = [], isLoading, strict = false, emptyMessage }, ref) => {
     const [inputValue, setInputValue] = useState('');
     const [open, setOpen] = useState(false);
     const [isComposing, setIsComposing] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
-
 
     // Filter suggestions based on input and not already selected (capped for performance)
     const filteredSuggestions = useMemo(() => {
@@ -40,9 +41,25 @@ export const TagsAutocompleteInput = forwardRef<HTMLDivElement, TagsAutocomplete
       return result;
     }, [inputValue, suggestions, value]);
 
+    /** In strict mode, only an exact (case-insensitive) suggestion match is
+     * accepted on commit; free-form input is discarded. */
+    const resolveMatch = useCallback(
+      (input: string): string | null => {
+        const trimmed = input.trim();
+        if (!trimmed) return null;
+        if (!strict) return trimmed;
+        return suggestions.find((s) => s.toLowerCase() === trimmed.toLowerCase()) ?? null;
+      },
+      [strict, suggestions]
+    );
+
+    // The popover can open when there are suggestions to show, or in strict
+    // mode when an empty-state message replaces the free-form "add" hint.
+    const canShowPopover = suggestions.length > 0 || (strict && Boolean(emptyMessage));
+
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       setInputValue(e.target.value);
-      if (e.target.value && !open && suggestions.length > 0) {
+      if (e.target.value && !open && canShowPopover) {
         setOpen(true);
       } else if (!e.target.value) {
         setOpen(false);
@@ -54,9 +71,9 @@ export const TagsAutocompleteInput = forwardRef<HTMLDivElement, TagsAutocomplete
 
       if (e.key === 'Enter' || e.key === ',') {
         e.preventDefault();
-        const newTag = inputValue.trim();
-        if (newTag && !value.includes(newTag)) {
-          onChange([...value, newTag]);
+        const matched = resolveMatch(inputValue);
+        if (matched && !value.includes(matched)) {
+          onChange([...value, matched]);
         }
         setInputValue('');
         setOpen(false);
@@ -82,9 +99,9 @@ export const TagsAutocompleteInput = forwardRef<HTMLDivElement, TagsAutocomplete
 
     const handleInputBlur = () => {
       if (isComposing) return;
-      const newTag = inputValue.trim();
-      if (newTag && !value.includes(newTag)) {
-        onChange([...value, newTag]);
+      const matched = resolveMatch(inputValue);
+      if (matched && !value.includes(matched)) {
+        onChange([...value, matched]);
       }
       setInputValue('');
       setOpen(false);
@@ -93,7 +110,7 @@ export const TagsAutocompleteInput = forwardRef<HTMLDivElement, TagsAutocomplete
     // Focus input when clicking on the container
     const handleContainerClick = () => {
       inputRef.current?.focus();
-      if (suggestions.length > 0 && inputValue) {
+      if (canShowPopover && inputValue) {
         setOpen(true);
       }
     };
@@ -110,6 +127,11 @@ export const TagsAutocompleteInput = forwardRef<HTMLDivElement, TagsAutocomplete
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
+
+    const hasPopoverContent =
+      isLoading ||
+      filteredSuggestions.length > 0 ||
+      (Boolean(inputValue.trim()) && (!strict || Boolean(emptyMessage)));
 
     return (
       <div
@@ -144,7 +166,7 @@ export const TagsAutocompleteInput = forwardRef<HTMLDivElement, TagsAutocomplete
               onKeyDown={handleKeyDown}
               onBlur={handleInputBlur}
               onFocus={() => {
-                if (suggestions.length > 0 && inputValue) {
+                if (canShowPopover && inputValue) {
                   setOpen(true);
                 }
               }}
@@ -154,7 +176,7 @@ export const TagsAutocompleteInput = forwardRef<HTMLDivElement, TagsAutocomplete
               className='placeholder:text-muted-foreground min-w-[80px] flex-1 bg-transparent outline-none'
             />
           </PopoverTrigger>
-          {(isLoading || filteredSuggestions.length > 0 || inputValue.trim()) && (
+          {hasPopoverContent && (
             <PopoverContent
               className='w-[var(--radix-popover-trigger-width)] max-w-[var(--radix-popover-trigger-width)] p-0'
               align='start'
@@ -179,7 +201,13 @@ export const TagsAutocompleteInput = forwardRef<HTMLDivElement, TagsAutocomplete
                     </div>
                   ))
                 ) : inputValue.trim() ? (
-                  <div className='text-muted-foreground p-2 text-sm'>Press Enter to add &quot;{inputValue}&quot;</div>
+                  strict ? (
+                    emptyMessage ? (
+                      <div className='text-muted-foreground p-2 text-sm'>{emptyMessage}</div>
+                    ) : null
+                  ) : (
+                    <div className='text-muted-foreground p-2 text-sm'>Press Enter to add &quot;{inputValue}&quot;</div>
+                  )
                 ) : null}
               </div>
             </PopoverContent>

@@ -187,7 +187,7 @@ func TestModelAssociationSignature_IncludesNestedCondition(t *testing.T) {
 			},
 			ChannelModel: &objects.ChannelModelAssociation{
 				ChannelID: 1,
-				ModelID:   "gpt-4",
+				ModelIDs:  []string{"gpt-4"},
 			},
 		},
 	}

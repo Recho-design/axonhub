@@ -52,8 +52,8 @@ func TestEffectiveModelAssociations_InheritsDeveloperSettings(t *testing.T) {
 	require.Equal(t, "gpt-4o", result[0].ChannelTagsModel.ModelID)
 	require.Same(t, modelAssociation, result[1])
 	require.Equal(t, "channel_model", result[2].Type)
-	require.Equal(t, "gpt-4o", result[2].ChannelModel.ModelID)
-	require.Empty(t, developerAssociationSamePriority.ChannelModel.ModelID)
+	require.Equal(t, []string{"gpt-4o"}, result[2].ChannelModel.ModelIDs)
+	require.Empty(t, developerAssociationSamePriority.ChannelModel.ModelIDs)
 	require.Empty(t, developerAssociationHigherPriority.ChannelTagsModel.ModelID)
 }
 
@@ -88,7 +88,7 @@ func TestEffectiveModelAssociations_DisablesDeveloperSettingsInheritance(t *test
 	})
 
 	require.Equal(t, []*objects.ModelAssociation{modelAssociation}, result)
-	require.Empty(t, developerAssociation.ChannelModel.ModelID)
+	require.Empty(t, developerAssociation.ChannelModel.ModelIDs)
 }
 
 func TestEffectiveModelAssociations_LegacyModelSettingsInheritByDefault(t *testing.T) {
@@ -116,7 +116,7 @@ func TestEffectiveModelAssociations_LegacyModelSettingsInheritByDefault(t *testi
 	})
 
 	require.Len(t, result, 1)
-	require.Equal(t, "gpt-4", result[0].ChannelModel.ModelID)
+	require.Equal(t, []string{"gpt-4"}, result[0].ChannelModel.ModelIDs)
 }
 
 func TestCloneModelAssociation_DeepCopiesWhenCondition(t *testing.T) {

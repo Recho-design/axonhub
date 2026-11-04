@@ -157,21 +157,28 @@ func matchChannelModel(assoc *objects.ModelAssociation, channels []*Channel, tra
 	}
 
 	entries := ch.GetModelEntries()
-	entry, contains := entries[assoc.ChannelModel.ModelID]
 
-	if !contains {
-		return nil
+	models := make([]ChannelModelEntry, 0, len(assoc.ChannelModel.ModelIDs))
+	for _, modelID := range assoc.ChannelModel.ModelIDs {
+		entry, contains := entries[modelID]
+		if !contains {
+			continue
+		}
+
+		// Check deduplication
+		if tracker.Add(ch.ID, modelID) {
+			models = append(models, entry)
+		}
 	}
 
-	// Check deduplication
-	if !tracker.Add(ch.ID, assoc.ChannelModel.ModelID) {
+	if len(models) == 0 {
 		return nil
 	}
 
 	return []*ModelChannelConnection{
 		{
 			Channel:  ch.Channel,
-			Models:   []ChannelModelEntry{entry},
+			Models:   models,
 			Priority: assoc.Priority,
 		},
 	}

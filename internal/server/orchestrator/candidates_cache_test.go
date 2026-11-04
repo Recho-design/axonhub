@@ -310,7 +310,7 @@ func TestDefaultSelector_SelectModelCandidates_Cache(t *testing.T) {
 						},
 						ChannelModel: &objects.ChannelModelAssociation{
 							ChannelID: channels[0].ID,
-							ModelID:   "gpt-3.5-turbo",
+							ModelIDs:  []string{"gpt-3.5-turbo"},
 						},
 					},
 					{
@@ -328,7 +328,7 @@ func TestDefaultSelector_SelectModelCandidates_Cache(t *testing.T) {
 						},
 						ChannelModel: &objects.ChannelModelAssociation{
 							ChannelID: longContextChannel.ID,
-							ModelID:   "claude-3-opus",
+							ModelIDs:  []string{"claude-3-opus"},
 						},
 					},
 				},
@@ -413,7 +413,7 @@ func TestDefaultSelector_SelectModelCandidates_Cache(t *testing.T) {
 						},
 						ChannelModel: &objects.ChannelModelAssociation{
 							ChannelID: streamChannel.ID,
-							ModelID:   "gpt-4",
+							ModelIDs:  []string{"gpt-4"},
 						},
 					},
 				},

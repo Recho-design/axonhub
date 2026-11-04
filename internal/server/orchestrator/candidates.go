@@ -423,7 +423,7 @@ func writeAssociationSignature(h hash.Hash64, assoc *objects.ModelAssociation) {
 	if assoc.ChannelModel != nil {
 		writeSignatureString(h, "channelModel")
 		writeSignatureInt(h, assoc.ChannelModel.ChannelID)
-		writeSignatureString(h, assoc.ChannelModel.ModelID)
+		writeStringSliceSignature(h, assoc.ChannelModel.ModelIDs)
 	}
 	if assoc.ChannelRegex != nil {
 		writeSignatureString(h, "channelRegex")

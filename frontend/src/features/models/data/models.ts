@@ -87,7 +87,7 @@ const MODELS_QUERY = `
               }
               channelModel {
                 channelId
-                modelId
+                modelIds
               }
               channelRegex {
                 channelId
@@ -209,7 +209,7 @@ const CREATE_MODEL_MUTATION = `
           }
           channelModel {
             channelId
-            modelId
+            modelIds
           }
           channelRegex {
             channelId
@@ -313,7 +313,7 @@ const BULK_CREATE_MODELS_MUTATION = `
           }
           channelModel {
             channelId
-            modelId
+            modelIds
           }
           channelRegex {
             channelId
@@ -417,7 +417,7 @@ const UPDATE_MODEL_MUTATION = `
           }
           channelModel {
             channelId
-            modelId
+            modelIds
           }
           channelRegex {
             channelId
@@ -692,7 +692,7 @@ export interface ModelAssociationInput {
   };
   channelModel?: {
     channelId: number;
-    modelId: string;
+    modelIds: string[];
   };
   channelRegex?: {
     channelId: number;
