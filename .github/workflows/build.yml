@@ -1,16 +1,8 @@
 name: Build
 
+# fork 定制: 移除 push/PR 自动触发, 仅手动 dispatch(合并上游时请保留此改动)
 on:
-  push:
-    branches:
-      - unstable
-      - development
-      - 'release/**'
-  pull_request:
-    branches:
-      - unstable
-      - development
-      - 'release/**'
+  workflow_dispatch:
 
 env:
   GO111MODULE: on

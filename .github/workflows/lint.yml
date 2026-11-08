@@ -1,15 +1,9 @@
 # Copy from https://github.com/spf13/cobra
 # https://github.com/spf13/cobra/blob/master/LICENSE.txt
 name: Lint
+# fork 定制: 移除 push/PR 自动触发, 仅手动 dispatch(合并上游时请保留此改动)
 on:
-  push:
-    branches:
-      - 'unstable'
-      - 'release/**'
-  pull_request:
-    branches:
-      - 'unstable'
-      - 'release/**'
+  workflow_dispatch:
 env:
   GO111MODULE: on
 

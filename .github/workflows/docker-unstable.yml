@@ -1,9 +1,7 @@
 name: Publish Docker image (unstable)
 
+# fork 定制: 移除 push 自动触发, 仅手动 dispatch(合并上游时请保留此改动)
 on:
-  push:
-    branches:
-      - unstable
   workflow_dispatch:
 
 jobs:

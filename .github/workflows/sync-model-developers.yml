@@ -1,8 +1,7 @@
 name: Sync Model Developers
 
+# fork 定制: 移除定时触发, 仅手动 dispatch(合并上游时请保留此改动)
 on:
-  schedule:
-    - cron: '0 0 * * 0'
   workflow_dispatch:
 
 jobs:
