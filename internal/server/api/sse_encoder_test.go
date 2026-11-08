@@ -36,7 +36,7 @@ func TestSSEEncoder_ExplicitProtocol_when_PathDiffers(t *testing.T) {
 				},
 			}
 			// When the shared writer finalizes the stream.
-			h.writeSSEStream(c, stream)
+			h.writeSSEStream(c, stream, h.sseKeepAlive)
 			// Then the encoder owns the event name and the original error survives.
 			require.Equal(t, 1, strings.Count(w.Body.String(), "event:protocol.failure\n"))
 			require.NotContains(t, w.Body.String(), "event:error")
@@ -65,7 +65,7 @@ func TestSSEEncoder_TerminalEvidence_when_PolicyWrapsStream(t *testing.T) {
 			stream := primeCodexTurnStateHeader(w.Header(), newUpstreamErrorStream(ctx, source, svc))
 			h := &ChatCompletionHandlers{sseKeepAlive: SSEKeepAliveConfig{Enabled: heartbeat, Interval: time.Hour}, sseHeartbeatFormat: sseHeartbeatOpenAI}
 			// When the common SSE writer drains the stream.
-			h.writeSSEStream(c, stream)
+			h.writeSSEStream(c, stream, h.sseKeepAlive)
 			// Then completion evidence suppresses the trailing error without losing its cause.
 			require.NotContains(t, w.Body.String(), "event:error")
 			require.ErrorIs(t, stream.Err(), io.ErrUnexpectedEOF)

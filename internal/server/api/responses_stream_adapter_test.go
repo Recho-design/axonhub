@@ -28,7 +28,7 @@ func TestResponsesStream_PreservesTerminal_when_TrailingTransportFails(t *testin
 				c.Request = httptest.NewRequest(http.MethodPost, "/custom/responses-alias", nil)
 				h := &ChatCompletionHandlers{streamAdapterFactory: newResponsesStreamAdapter, sseKeepAlive: SSEKeepAliveConfig{Enabled: heartbeat, Interval: time.Hour}, sseHeartbeatFormat: sseHeartbeatOpenAI}
 				// When the explicitly registered Responses adapter drains the source.
-				h.writeSSEStream(c, source)
+				h.writeSSEStream(c, source, h.sseKeepAlive)
 				// Then it forwards the existing terminal once and preserves the original error.
 				require.Equal(t, 1, strings.Count(w.Body.String(), "data:"))
 				require.Contains(t, w.Body.String(), string(data))
@@ -48,7 +48,7 @@ func TestSSEEncoder_DefaultWire_when_ResponsesPathHasNoAdapter(t *testing.T) {
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			h := &ChatCompletionHandlers{sseKeepAlive: SSEKeepAliveConfig{Enabled: heartbeat, Interval: time.Hour}, sseHeartbeatFormat: sseHeartbeatOpenAI}
 			// When the stream ends with a transport failure.
-			h.writeSSEStream(c, &errorAfterStream{err: io.ErrUnexpectedEOF})
+			h.writeSSEStream(c, &errorAfterStream{err: io.ErrUnexpectedEOF}, h.sseKeepAlive)
 			// Then the existing default wire shape is retained regardless of URL.
 			event := parseSSEErrorEvent(t, w.Body.String())
 			require.Contains(t, event, "error")

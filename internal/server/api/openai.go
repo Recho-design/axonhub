@@ -50,6 +50,7 @@ type OpenAIHandlersParams struct {
 	PluginManager               *plugin.Manager
 	Client                      *ent.Client
 	SSEKeepAliveConfig          SSEKeepAliveConfig
+	NonStreamKeepAliveConfig    NonStreamKeepAliveConfig
 }
 
 type OpenAIHandlers struct {
@@ -361,6 +362,8 @@ func NewOpenAIHandlers(params OpenAIHandlersParams) *OpenAIHandlers {
 		handlers.TranslationHandlers,
 	} {
 		handler.sseKeepAlive = params.SSEKeepAliveConfig
+		handler.nonStreamKeepAlive = params.NonStreamKeepAliveConfig
+		handler.keepAliveConfigProvider = keepAliveProviderFromSystemService(params.SystemService)
 		handler.sseHeartbeatFormat = sseHeartbeatOpenAI
 	}
 

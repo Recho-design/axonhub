@@ -584,3 +584,31 @@ extend type Mutation {
   updateClaudeCodeSafeguardsSettings(input: UpdateClaudeCodeSafeguardsInput!): Boolean!
   resetClaudeCodeSafeguardsSettings: Boolean!
 }
+
+type KeepAliveConfig {
+  enabled: Boolean!
+  intervalSeconds: Float!
+}
+
+type KeepAliveSettings {
+  streaming: KeepAliveConfig!
+  nonStreaming: KeepAliveConfig!
+  usingServerDefaults: Boolean!
+}
+
+input UpdateKeepAliveConfigInput {
+  enabled: Boolean!
+  intervalSeconds: Float!
+}
+
+input UpdateKeepAliveInput {
+  streaming: UpdateKeepAliveConfigInput!
+  nonStreaming: UpdateKeepAliveConfigInput!
+}
+extend type Query {
+  keepAliveSettings: KeepAliveSettings!
+}
+extend type Mutation {
+  updateKeepAliveSettings(input: UpdateKeepAliveInput!): Boolean!
+  resetKeepAliveSettings: Boolean!
+}

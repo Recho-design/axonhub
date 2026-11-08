@@ -690,6 +690,7 @@ type SystemServiceParams struct {
 	fx.In
 
 	SafeguardsConfig safeguards.Config `optional:"true"`
+	KeepAlive        KeepAliveDefaults `optional:"true"`
 	CacheConfig      xcache.Config
 	Ent              *ent.Client
 }
@@ -700,6 +701,7 @@ func NewSystemService(params SystemServiceParams) *SystemService {
 			db: params.Ent,
 		},
 		safeguardsDefaults: params.SafeguardsConfig,
+		keepAliveDefaults:  params.KeepAlive,
 		CacheConfig:        params.CacheConfig,
 		Cache:              xcache.NewFromConfig[ent.System](params.CacheConfig),
 	}
@@ -709,6 +711,8 @@ type SystemService struct {
 	*AbstractService
 
 	safeguardsDefaults safeguards.Config
+
+	keepAliveDefaults KeepAliveDefaults
 
 	CacheConfig xcache.Config
 	Cache       xcache.Cache[ent.System]

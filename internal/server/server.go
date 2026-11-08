@@ -134,10 +134,28 @@ func Run(opts ...fx.Option) {
 			api.Module,
 			fx.Provide(fx.Annotate(func(cfg Config) string { return cfg.PublicURL }, fx.ResultTags(`name:"public_url"`))),
 			fx.Provide(func(cfg Config) safeguards.Config { return cfg.Safeguards }),
+			fx.Provide(func(cfg Config) biz.KeepAliveDefaults {
+				return biz.KeepAliveDefaults{
+					Streaming: biz.KeepAliveConfig{
+						Enabled:         cfg.SSEKeepAlive.Enabled,
+						IntervalSeconds: cfg.SSEKeepAlive.Interval.Seconds(),
+					},
+					NonStreaming: biz.KeepAliveConfig{
+						Enabled:         cfg.NonStreamKeepAlive.Enabled,
+						IntervalSeconds: cfg.NonStreamKeepAlive.Interval.Seconds(),
+					},
+				}
+			}),
 			fx.Provide(func(cfg Config) api.SSEKeepAliveConfig {
 				return api.SSEKeepAliveConfig{
 					Enabled:  cfg.SSEKeepAlive.Enabled,
 					Interval: cfg.SSEKeepAlive.Interval,
+				}
+			}),
+			fx.Provide(func(cfg Config) api.NonStreamKeepAliveConfig {
+				return api.NonStreamKeepAliveConfig{
+					Enabled:  cfg.NonStreamKeepAlive.Enabled,
+					Interval: cfg.NonStreamKeepAlive.Interval,
 				}
 			}),
 			fx.Invoke(func(cfg log.Config) {

@@ -6,6 +6,7 @@ import { CodexCompatibilitySettings } from './components/codex-compatibility-set
 import { DiagnosticsSettings } from './components/diagnostics-settings';
 import { ForwardingSettings } from './components/forwarding-settings';
 import { GeneralSettings } from './components/general-settings';
+import { KeepAliveSettings } from './components/keep-alive-settings';
 import { ProxyPresetsSettings } from './components/proxy-presets-settings';
 import { QuotaSettings } from './components/quota-settings';
 import { RetrySettings } from './components/retry-settings';
@@ -25,6 +26,7 @@ export type SystemTabKey =
   | 'about'
   | 'retry'
   | 'forwarding'
+  | 'keep-alive'
   | 'proxy'
   | 'quota'
   | 'webhook'
@@ -64,6 +66,7 @@ export const SYSTEM_PAGES: Record<SystemPageKey, SystemPageDef> = {
     tabs: [
       { key: 'retry', labelKey: 'system.tabs.retry', component: RetrySettings },
       { key: 'forwarding', labelKey: 'system.tabs.forwarding', component: ForwardingSettings },
+      { key: 'keep-alive', labelKey: 'system.tabs.keepAlive', component: KeepAliveSettings },
       { key: 'proxy', labelKey: 'system.tabs.proxy', component: ProxyPresetsSettings },
       { key: 'quota', labelKey: 'system.tabs.quota', component: QuotaSettings },
     ],

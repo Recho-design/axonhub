@@ -43,7 +43,7 @@ func TestResponsesStream_ConversionOutcome_when_SourceEnds(t *testing.T) {
 					c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
 					h := &ChatCompletionHandlers{streamAdapterFactory: newResponsesStreamAdapter, ChatCompletionOrchestrator: &orchestrator.ChatCompletionOrchestrator{SystemService: svc}, sseKeepAlive: SSEKeepAliveConfig{Enabled: heartbeat, Interval: time.Hour}, sseHeartbeatFormat: sseHeartbeatOpenAI}
 					// When
-					h.writeSSEStream(c, newUpstreamErrorStream(ctx, converted, svc))
+					h.writeSSEStream(c, newUpstreamErrorStream(ctx, converted, svc), h.sseKeepAlive)
 					// Then partial content is retained and cancellation produces no error.
 					body := w.Body.String()
 					require.Contains(t, body, `"delta":"hello"`)

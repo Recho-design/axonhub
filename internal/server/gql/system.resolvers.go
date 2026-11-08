@@ -454,6 +454,18 @@ func (r *mutationResolver) ResetClaudeCodeSafeguardsSettings(ctx context.Context
 	return err == nil, err
 }
 
+// UpdateKeepAliveSettings is the resolver for the updateKeepAliveSettings field.
+func (r *mutationResolver) UpdateKeepAliveSettings(ctx context.Context, input biz.KeepAliveSettings) (bool, error) {
+	err := r.systemService.SetKeepAliveSettings(ctx, input)
+	return err == nil, err
+}
+
+// ResetKeepAliveSettings is the resolver for the resetKeepAliveSettings field.
+func (r *mutationResolver) ResetKeepAliveSettings(ctx context.Context) (bool, error) {
+	err := r.systemService.ResetKeepAliveSettings(ctx)
+	return err == nil, err
+}
+
 // Providers is the resolver for the providers field.
 func (r *providerQuotaCollectionSettingsResolver) Providers(ctx context.Context, obj *biz.ProviderQuotaCollectionSettings) ([]*biz.ProviderQuotaCollectionProvider, error) {
 	providers := make([]*biz.ProviderQuotaCollectionProvider, 0, len(obj.Providers))
@@ -865,6 +877,11 @@ func (r *queryResolver) GetCacheDiagnostics(ctx context.Context, input *GetCache
 // ClaudeCodeSafeguardsSettings is the resolver for the claudeCodeSafeguardsSettings field.
 func (r *queryResolver) ClaudeCodeSafeguardsSettings(ctx context.Context) (*biz.ClaudeCodeSafeguardsSettings, error) {
 	return r.systemService.ClaudeCodeSafeguardsSettings(ctx)
+}
+
+// KeepAliveSettings is the resolver for the keepAliveSettings field.
+func (r *queryResolver) KeepAliveSettings(ctx context.Context) (*biz.KeepAliveSettings, error) {
+	return r.systemService.KeepAliveSettings(ctx)
 }
 
 // ProviderQuotaCollectionSettings returns ProviderQuotaCollectionSettingsResolver implementation.

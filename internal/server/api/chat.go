@@ -15,6 +15,7 @@ import (
 
 	"github.com/looplj/axonhub/internal/contexts"
 	"github.com/looplj/axonhub/internal/log"
+	"github.com/looplj/axonhub/internal/server/biz"
 	"github.com/looplj/axonhub/internal/server/orchestrator"
 	"github.com/looplj/axonhub/internal/server/safeguards"
 	"github.com/looplj/axonhub/llm"
@@ -49,6 +50,8 @@ type ChatCompletionHandlers struct {
 	ChatCompletionOrchestrator *orchestrator.ChatCompletionOrchestrator
 	StreamWriter               StreamWriter
 	sseKeepAlive               SSEKeepAliveConfig
+	nonStreamKeepAlive         NonStreamKeepAliveConfig
+	keepAliveConfigProvider    func(context.Context) (biz.KeepAliveSettings, error)
 	sseHeartbeatFormat         sseHeartbeatFormat
 	streamAdapterFactory       streamAdapterFactory
 	safeguardsConfig           safeguards.Config
@@ -120,25 +123,62 @@ func (handlers *ChatCompletionHandlers) ChatCompletionWithRequest(c *gin.Context
 		processCtx, abortUpstream = context.WithCancel(ctx)
 		defer abortUpstream()
 	}
+
+	// Keep-alive settings are read at most once per request and feed both heartbeat paths:
+	// the non-streaming one while Process blocks, the SSE one while a stream idles.
+	nonStreamKeepAlive, sseKeepAlive := handlers.resolveKeepAlive(ctx)
+
+	// Non-streaming requests stay silent on the wire while Process blocks, so an
+	// intermediary with an idle timeout (Cloudflare: 100s) may drop the connection.
+	// Streaming responses carry their own SSE heartbeat and are left untouched.
+	heartbeatCfg := NonStreamKeepAliveConfig{}
+	if isNonStreamingRequest(genericReq) {
+		heartbeatCfg = nonStreamKeepAlive
+	}
+	heartbeat := startNonStreamKeepAlive(c, heartbeatCfg)
+	// Guards against a panic in Process leaving the heartbeat goroutine writing into a
+	// response that gin's recovery middleware is about to overwrite.
+	defer heartbeat.stop()
+
 	result, err := handlers.ChatCompletionOrchestrator.Process(processCtx, genericReq)
+	heartbeat.stop()
+
 	if err != nil {
 		log.Error(ctx, "Error processing chat completion", log.Cause(err))
 
 		httpErr := transformOrchestratorError(ctx, err, handlers.ChatCompletionOrchestrator)
+		if heartbeat.started() {
+			// The heartbeat already committed a 200 with a JSON content type, so the
+			// status cannot change anymore; deliver the error body inside it.
+			log.Warn(ctx, "Non-stream keep-alive committed the response before the upstream error, returning the error body with status 200",
+				log.Int("upstream_status_code", httpErr.StatusCode))
+			if writeErr := writeCommittedBody(c.Writer, httpErr.Body); writeErr != nil {
+				log.Warn(ctx, "Failed to write error body after non-stream keep-alive heartbeat", log.Cause(writeErr))
+			}
+
+			return
+		}
+
 		c.JSON(httpErr.StatusCode, json.RawMessage(httpErr.Body))
 
 		return
 	}
 
-	writeForwardResponseHeaders(c, genericReq, result)
+	if !heartbeat.started() {
+		writeForwardResponseHeaders(c, genericReq, result)
+	}
 
 	if result.ChatCompletion != nil {
 		resp := result.ChatCompletion
-		copyCodexTurnStateHeader(c.Writer.Header(), resp.Headers)
+		committed := heartbeat.started()
 
 		contentType := "application/json"
-		if ct := resp.Headers.Get("Content-Type"); ct != "" {
-			contentType = ct
+		if !committed {
+			copyCodexTurnStateHeader(c.Writer.Header(), resp.Headers)
+
+			if ct := resp.Headers.Get("Content-Type"); ct != "" {
+				contentType = ct
+			}
 		}
 
 		body, err := evaluator.AnnotateResponse(ctx, resp.Body)
@@ -146,12 +186,31 @@ func (handlers *ChatCompletionHandlers) ChatCompletionWithRequest(c *gin.Context
 			JSONError(c, http.StatusBadGateway, err)
 			return
 		}
+
+		if committed {
+			// Headers and the status line were committed by the heartbeat, so the
+			// upstream status and headers can no longer be forwarded downstream.
+			if resp.StatusCode != http.StatusOK {
+				log.Debug(ctx, "Non-stream keep-alive committed status 200 for a non-200 upstream response",
+					log.Int("upstream_status_code", resp.StatusCode))
+			}
+			if writeErr := writeCommittedBody(c.Writer, body); writeErr != nil {
+				log.Warn(ctx, "Failed to write response body after non-stream keep-alive heartbeat", log.Cause(writeErr))
+			}
+
+			return
+		}
+
 		c.Data(resp.StatusCode, contentType, body)
 
 		return
 	}
 
 	if result.ChatCompletionStream != nil {
+		if heartbeat.started() {
+			log.Warn(ctx, "Non-stream keep-alive committed the response but the orchestrator returned a stream")
+		}
+
 		defer func() {
 			log.Debug(ctx, "Close chat stream")
 
@@ -177,7 +236,7 @@ func (handlers *ChatCompletionHandlers) ChatCompletionWithRequest(c *gin.Context
 			return
 		}
 
-		handlers.writeSSEStream(c, stream)
+		handlers.writeSSEStream(c, stream, sseKeepAlive)
 	}
 }
 

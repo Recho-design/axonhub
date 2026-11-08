@@ -100,6 +100,8 @@ type Config struct {
 
 	SSEKeepAlive SSEKeepAlive `conf:"sse_keep_alive" yaml:"sse_keep_alive" json:"sse_keep_alive"`
 
+	NonStreamKeepAlive NonStreamKeepAlive `conf:"non_stream_keep_alive" yaml:"non_stream_keep_alive" json:"non_stream_keep_alive"`
+
 	Trace     tracing.Config `conf:"trace" yaml:"trace" json:"trace"`
 	Dashboard Dashboard      `conf:"dashboard" yaml:"dashboard" json:"dashboard"`
 
@@ -115,7 +117,17 @@ type Config struct {
 	MaxMultipartMemory MemorySize `conf:"max_multipart_memory" yaml:"max_multipart_memory" json:"max_multipart_memory"`
 }
 
+// SSEKeepAlive controls heartbeats for streaming (SSE) responses. Settings saved in the
+// WebUI override this value at runtime; resetting them there falls back to this value.
 type SSEKeepAlive struct {
+	Enabled  bool          `conf:"enabled" yaml:"enabled" json:"enabled"`
+	Interval time.Duration `conf:"interval" yaml:"interval" json:"interval"`
+}
+
+// NonStreamKeepAlive holds keep-alive settings for non-streaming requests, which
+// otherwise stay silent on the wire while the upstream call blocks. Settings saved in
+// the WebUI override this value at runtime; resetting them there falls back to this value.
+type NonStreamKeepAlive struct {
 	Enabled  bool          `conf:"enabled" yaml:"enabled" json:"enabled"`
 	Interval time.Duration `conf:"interval" yaml:"interval" json:"interval"`
 }

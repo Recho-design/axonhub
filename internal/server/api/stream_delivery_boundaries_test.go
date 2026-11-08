@@ -81,7 +81,7 @@ func TestStreamDeliverySSEAdapterFactory(t *testing.T) {
 		return streams.MapErr(stream, func(e *httpclient.StreamEvent) (*httpclient.StreamEvent, error) { return e, nil }), encodeStreamError(FormatStreamError)
 	}}
 	// When
-	h.writeSSEStream(c, s)
+	h.writeSSEStream(c, s, h.sseKeepAlive)
 	// Then
 	require.True(t, s.DeliveryAcknowledged())
 	require.Equal(t, 1, countDeliveryAcks(trace.steps))

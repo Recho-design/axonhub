@@ -33,7 +33,7 @@ func TestResponsesStream_ProtocolError_when_Interrupted(t *testing.T) {
 				}, err: streamErr}
 				h := &ChatCompletionHandlers{streamAdapterFactory: newResponsesStreamAdapter, sseKeepAlive: SSEKeepAliveConfig{Enabled: heartbeat, Interval: time.Hour}, sseHeartbeatFormat: sseHeartbeatOpenAI}
 				// When
-				h.writeSSEStream(c, stream)
+				h.writeSSEStream(c, stream, h.sseKeepAlive)
 				// Then the partial output is followed by exactly one Responses error.
 				require.Equal(t, 2, strings.Count(w.Body.String(), "data:"))
 				event := parseSSEErrorEvent(t, w.Body.String())
@@ -65,7 +65,7 @@ func TestResponsesStream_ContextOutcome_when_Interrupted(t *testing.T) {
 				stream := &errorAfterStream{items: []*httpclient.StreamEvent{{Type: "response.output_text.delta", Data: []byte(`{"type":"response.output_text.delta","sequence_number":4,"delta":"hello"}`)}}, err: ctx.Err()}
 				h := &ChatCompletionHandlers{streamAdapterFactory: newResponsesStreamAdapter, sseKeepAlive: SSEKeepAliveConfig{Enabled: heartbeat, Interval: time.Hour}, sseHeartbeatFormat: sseHeartbeatOpenAI}
 				// When
-				h.writeSSEStream(c, stream)
+				h.writeSSEStream(c, stream, h.sseKeepAlive)
 				// Then cancellation is silent and a server deadline is a protocol error.
 				if deadline {
 					event := parseSSEErrorEvent(t, w.Body.String())
@@ -91,7 +91,7 @@ func TestResponsesStream_Policy_when_Interrupted(t *testing.T) {
 				stream := newUpstreamErrorStream(ctx, &errorAfterStream{err: syscall.ECONNRESET}, svc)
 				h := &ChatCompletionHandlers{streamAdapterFactory: newResponsesStreamAdapter, ChatCompletionOrchestrator: &orchestrator.ChatCompletionOrchestrator{SystemService: svc}, sseKeepAlive: SSEKeepAliveConfig{Enabled: heartbeat, Interval: time.Hour}, sseHeartbeatFormat: sseHeartbeatOpenAI}
 				// When
-				h.writeSSEStream(c, stream)
+				h.writeSSEStream(c, stream, h.sseKeepAlive)
 				// Then redaction preserves the transport classification.
 				event := parseSSEErrorEvent(t, w.Body.String())
 				require.Equal(t, "error", event["type"])
@@ -122,7 +122,7 @@ func TestResponsesStream_NoTrailingError_when_TerminalPrecedesDeadline(t *testin
 				stream := &errorAfterStream{items: []*httpclient.StreamEvent{{Type: terminal, Data: data}}, err: context.DeadlineExceeded}
 				h := &ChatCompletionHandlers{streamAdapterFactory: newResponsesStreamAdapter, sseKeepAlive: SSEKeepAliveConfig{Enabled: heartbeat, Interval: time.Hour}, sseHeartbeatFormat: sseHeartbeatOpenAI}
 				// When
-				h.writeSSEStream(c, stream)
+				h.writeSSEStream(c, stream, h.sseKeepAlive)
 				// Then
 				require.Equal(t, 1, strings.Count(w.Body.String(), "data:"))
 			})

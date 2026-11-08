@@ -28,7 +28,8 @@ func encodeStreamError(formatErr StreamErrorFormatter) StreamErrorEncoder {
 	}
 }
 
-func (h *ChatCompletionHandlers) writeSSEStream(c *gin.Context, stream streams.Stream[*httpclient.StreamEvent]) {
+// writeSSEStream writes the stream with the keep-alive config resolved for this request.
+func (h *ChatCompletionHandlers) writeSSEStream(c *gin.Context, stream streams.Stream[*httpclient.StreamEvent], keepAlive SSEKeepAliveConfig) {
 	encodeErr := encodeStreamError(FormatStreamError)
 	if h.streamAdapterFactory != nil {
 		var systemService *biz.SystemService
@@ -39,5 +40,5 @@ func (h *ChatCompletionHandlers) writeSSEStream(c *gin.Context, stream streams.S
 		stream, encodeErr = h.streamAdapterFactory(c.Request.Context(), stream, systemService)
 		stream = preserveStreamDelivery(stream, source)
 	}
-	writeEncodedSSEStream(c, stream, encodeErr, h.sseKeepAlive, h.sseHeartbeatFormat)
+	writeEncodedSSEStream(c, stream, encodeErr, keepAlive, h.sseHeartbeatFormat)
 }

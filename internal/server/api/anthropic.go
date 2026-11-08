@@ -36,6 +36,7 @@ type AnthropicHandlersParams struct {
 	ProviderQuotaStatusProvider orchestrator.ProviderQuotaStatusProvider
 	PluginManager               *plugin.Manager
 	SSEKeepAliveConfig          SSEKeepAliveConfig
+	NonStreamKeepAliveConfig    NonStreamKeepAliveConfig
 	SafeguardsConfig            safeguards.Config `optional:"true"`
 }
 
@@ -65,6 +66,8 @@ func NewAnthropicHandlers(params AnthropicHandlersParams) *AnthropicHandlers {
 				params.ProviderQuotaStatusProvider,
 				orchestratorPlugins(params.PluginManager)),
 			sseKeepAlive:             params.SSEKeepAliveConfig,
+			nonStreamKeepAlive:       params.NonStreamKeepAliveConfig,
+			keepAliveConfigProvider:  keepAliveProviderFromSystemService(params.SystemService),
 			sseHeartbeatFormat:       sseHeartbeatAnthropic,
 			safeguardsConfig:         params.SafeguardsConfig,
 			safeguardsConfigProvider: params.SystemService.ClaudeCodeSafeguardsConfig,

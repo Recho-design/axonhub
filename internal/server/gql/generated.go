@@ -879,6 +879,17 @@ type ComplexityRoot struct {
 		User    func(childComplexity int) int
 	}
 
+	KeepAliveConfig struct {
+		Enabled         func(childComplexity int) int
+		IntervalSeconds func(childComplexity int) int
+	}
+
+	KeepAliveSettings struct {
+		NonStreaming        func(childComplexity int) int
+		Streaming           func(childComplexity int) int
+		UsingServerDefaults func(childComplexity int) int
+	}
+
 	Model struct {
 		AssociatedChannelCount func(childComplexity int) int
 		CreatedAt              func(childComplexity int) int
@@ -1106,6 +1117,7 @@ type ComplexityRoot struct {
 		RemoveUserFromProject                 func(childComplexity int, input RemoveUserFromProjectInput) int
 		ResetChannelQuotaNow                  func(childComplexity int, channelID objects.GUID) int
 		ResetClaudeCodeSafeguardsSettings     func(childComplexity int) int
+		ResetKeepAliveSettings                func(childComplexity int) int
 		Restore                               func(childComplexity int, file graphql.Upload, input backup.RestoreOptions) int
 		RetainThread                          func(childComplexity int, id objects.GUID) int
 		RetainTrace                           func(childComplexity int, id objects.GUID) int
@@ -1141,6 +1153,7 @@ type ComplexityRoot struct {
 		UpdateCodexCompatibilitySettings      func(childComplexity int, input biz.CodexCompatibilitySettings) int
 		UpdateDataStorage                     func(childComplexity int, id objects.GUID, input ent.UpdateDataStorageInput) int
 		UpdateDefaultDataStorage              func(childComplexity int, input UpdateDefaultDataStorageInput) int
+		UpdateKeepAliveSettings               func(childComplexity int, input biz.KeepAliveSettings) int
 		UpdateMe                              func(childComplexity int, input UpdateMeInput) int
 		UpdateModel                           func(childComplexity int, id objects.GUID, input ent.UpdateModelInput) int
 		UpdateModelStatus                     func(childComplexity int, id objects.GUID, status model.Status) int
@@ -1623,6 +1636,7 @@ type ComplexityRoot struct {
 		FastestModels                   func(childComplexity int, input FastestChannelsInput) int
 		FetchModels                     func(childComplexity int, input biz.FetchModelsInput) int
 		GetCacheDiagnostics             func(childComplexity int, input *GetCacheDiagnosticsInput) int
+		KeepAliveSettings               func(childComplexity int) int
 		Me                              func(childComplexity int) int
 		ModelPerformanceStats           func(childComplexity int) int
 		Models                          func(childComplexity int, after *entgql.Cursor[int], first *int, before *entgql.Cursor[int], last *int, orderBy *ent.ModelOrder, where *ent.ModelWhereInput) int
@@ -2567,6 +2581,8 @@ type MutationResolver interface {
 	ClearCache(ctx context.Context, input ClearCacheInput) (*ClearCachePayload, error)
 	UpdateClaudeCodeSafeguardsSettings(ctx context.Context, input biz.ClaudeCodeSafeguardsConfig) (bool, error)
 	ResetClaudeCodeSafeguardsSettings(ctx context.Context) (bool, error)
+	UpdateKeepAliveSettings(ctx context.Context, input biz.KeepAliveSettings) (bool, error)
+	ResetKeepAliveSettings(ctx context.Context) (bool, error)
 	CreateModel(ctx context.Context, input ent.CreateModelInput) (*ent.Model, error)
 	BulkCreateModels(ctx context.Context, inputs []*ent.CreateModelInput) ([]*ent.Model, error)
 	UpdateModel(ctx context.Context, id objects.GUID, input ent.UpdateModelInput) (*ent.Model, error)
@@ -2709,6 +2725,7 @@ type QueryResolver interface {
 	UsageCostInjectionSettings(ctx context.Context) (*UsageCostInjectionSettings, error)
 	GetCacheDiagnostics(ctx context.Context, input *GetCacheDiagnosticsInput) (*GetCacheDiagnosticsPayload, error)
 	ClaudeCodeSafeguardsSettings(ctx context.Context) (*biz.ClaudeCodeSafeguardsSettings, error)
+	KeepAliveSettings(ctx context.Context) (*biz.KeepAliveSettings, error)
 	FetchModels(ctx context.Context, input biz.FetchModelsInput) (*FetchModelsPayload, error)
 	QueryModels(ctx context.Context, input QueryModelsInput) ([]*biz.ModelIdentityWithStatus, error)
 	QueryModelChannelConnections(ctx context.Context, associations []*objects.ModelAssociation) ([]*biz.ModelChannelConnection, error)
@@ -5740,6 +5757,38 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.InitializeSystemPayload.User(childComplexity), true
 
+	case "KeepAliveConfig.enabled":
+		if e.complexity.KeepAliveConfig.Enabled == nil {
+			break
+		}
+
+		return e.complexity.KeepAliveConfig.Enabled(childComplexity), true
+	case "KeepAliveConfig.intervalSeconds":
+		if e.complexity.KeepAliveConfig.IntervalSeconds == nil {
+			break
+		}
+
+		return e.complexity.KeepAliveConfig.IntervalSeconds(childComplexity), true
+
+	case "KeepAliveSettings.nonStreaming":
+		if e.complexity.KeepAliveSettings.NonStreaming == nil {
+			break
+		}
+
+		return e.complexity.KeepAliveSettings.NonStreaming(childComplexity), true
+	case "KeepAliveSettings.streaming":
+		if e.complexity.KeepAliveSettings.Streaming == nil {
+			break
+		}
+
+		return e.complexity.KeepAliveSettings.Streaming(childComplexity), true
+	case "KeepAliveSettings.usingServerDefaults":
+		if e.complexity.KeepAliveSettings.UsingServerDefaults == nil {
+			break
+		}
+
+		return e.complexity.KeepAliveSettings.UsingServerDefaults(childComplexity), true
+
 	case "Model.associatedChannelCount":
 		if e.complexity.Model.AssociatedChannelCount == nil {
 			break
@@ -7119,6 +7168,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Mutation.ResetClaudeCodeSafeguardsSettings(childComplexity), true
+	case "Mutation.resetKeepAliveSettings":
+		if e.complexity.Mutation.ResetKeepAliveSettings == nil {
+			break
+		}
+
+		return e.complexity.Mutation.ResetKeepAliveSettings(childComplexity), true
 	case "Mutation.restore":
 		if e.complexity.Mutation.Restore == nil {
 			break
@@ -7499,6 +7554,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Mutation.UpdateDefaultDataStorage(childComplexity, args["input"].(UpdateDefaultDataStorageInput)), true
+	case "Mutation.updateKeepAliveSettings":
+		if e.complexity.Mutation.UpdateKeepAliveSettings == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateKeepAliveSettings_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Mutation.UpdateKeepAliveSettings(childComplexity, args["input"].(biz.KeepAliveSettings)), true
 	case "Mutation.updateMe":
 		if e.complexity.Mutation.UpdateMe == nil {
 			break
@@ -9727,6 +9793,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Query.GetCacheDiagnostics(childComplexity, args["input"].(*GetCacheDiagnosticsInput)), true
+	case "Query.keepAliveSettings":
+		if e.complexity.Query.KeepAliveSettings == nil {
+			break
+		}
+
+		return e.complexity.Query.KeepAliveSettings(childComplexity), true
 	case "Query.me":
 		if e.complexity.Query.Me == nil {
 			break
@@ -13208,6 +13280,8 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputUpdateCodexCompatibilitySettingsInput,
 		ec.unmarshalInputUpdateDataStorageInput,
 		ec.unmarshalInputUpdateDefaultDataStorageInput,
+		ec.unmarshalInputUpdateKeepAliveConfigInput,
+		ec.unmarshalInputUpdateKeepAliveInput,
 		ec.unmarshalInputUpdateMeInput,
 		ec.unmarshalInputUpdateModelInput,
 		ec.unmarshalInputUpdateMyPasswordInput,
@@ -14990,6 +15064,17 @@ func (ec *executionContext) field_Mutation_updateDefaultDataStorage_args(ctx con
 	var err error
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNUpdateDefaultDataStorageInput2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋgqlᚐUpdateDefaultDataStorageInput)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_updateKeepAliveSettings_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNUpdateKeepAliveInput2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐKeepAliveSettings)
 	if err != nil {
 		return nil, err
 	}
@@ -32315,6 +32400,163 @@ func (ec *executionContext) fieldContext_InitializeSystemPayload_token(_ context
 	return fc, nil
 }
 
+func (ec *executionContext) _KeepAliveConfig_enabled(ctx context.Context, field graphql.CollectedField, obj *biz.KeepAliveConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_KeepAliveConfig_enabled,
+		func(ctx context.Context) (any, error) {
+			return obj.Enabled, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_KeepAliveConfig_enabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KeepAliveConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KeepAliveConfig_intervalSeconds(ctx context.Context, field graphql.CollectedField, obj *biz.KeepAliveConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_KeepAliveConfig_intervalSeconds,
+		func(ctx context.Context) (any, error) {
+			return obj.IntervalSeconds, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_KeepAliveConfig_intervalSeconds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KeepAliveConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KeepAliveSettings_streaming(ctx context.Context, field graphql.CollectedField, obj *biz.KeepAliveSettings) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_KeepAliveSettings_streaming,
+		func(ctx context.Context) (any, error) {
+			return obj.Streaming, nil
+		},
+		nil,
+		ec.marshalNKeepAliveConfig2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐKeepAliveConfig,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_KeepAliveSettings_streaming(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KeepAliveSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "enabled":
+				return ec.fieldContext_KeepAliveConfig_enabled(ctx, field)
+			case "intervalSeconds":
+				return ec.fieldContext_KeepAliveConfig_intervalSeconds(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type KeepAliveConfig", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KeepAliveSettings_nonStreaming(ctx context.Context, field graphql.CollectedField, obj *biz.KeepAliveSettings) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_KeepAliveSettings_nonStreaming,
+		func(ctx context.Context) (any, error) {
+			return obj.NonStreaming, nil
+		},
+		nil,
+		ec.marshalNKeepAliveConfig2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐKeepAliveConfig,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_KeepAliveSettings_nonStreaming(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KeepAliveSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "enabled":
+				return ec.fieldContext_KeepAliveConfig_enabled(ctx, field)
+			case "intervalSeconds":
+				return ec.fieldContext_KeepAliveConfig_intervalSeconds(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type KeepAliveConfig", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KeepAliveSettings_usingServerDefaults(ctx context.Context, field graphql.CollectedField, obj *biz.KeepAliveSettings) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_KeepAliveSettings_usingServerDefaults,
+		func(ctx context.Context) (any, error) {
+			return obj.UsingServerDefaults, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_KeepAliveSettings_usingServerDefaults(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KeepAliveSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Model_id(ctx context.Context, field graphql.CollectedField, obj *ent.Model) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -40620,6 +40862,76 @@ func (ec *executionContext) _Mutation_resetClaudeCodeSafeguardsSettings(ctx cont
 }
 
 func (ec *executionContext) fieldContext_Mutation_resetClaudeCodeSafeguardsSettings(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_updateKeepAliveSettings(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_updateKeepAliveSettings,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.resolvers.Mutation().UpdateKeepAliveSettings(ctx, fc.Args["input"].(biz.KeepAliveSettings))
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_updateKeepAliveSettings(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_updateKeepAliveSettings_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_resetKeepAliveSettings(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_resetKeepAliveSettings,
+		func(ctx context.Context) (any, error) {
+			return ec.resolvers.Mutation().ResetKeepAliveSettings(ctx)
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_resetKeepAliveSettings(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "Mutation",
 		Field:      field,
@@ -53927,6 +54239,43 @@ func (ec *executionContext) fieldContext_Query_claudeCodeSafeguardsSettings(_ co
 				return ec.fieldContext_ClaudeCodeSafeguardsSettings_defaultPolicy(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClaudeCodeSafeguardsSettings", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_keepAliveSettings(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_keepAliveSettings,
+		func(ctx context.Context) (any, error) {
+			return ec.resolvers.Query().KeepAliveSettings(ctx)
+		},
+		nil,
+		ec.marshalNKeepAliveSettings2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐKeepAliveSettings,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_keepAliveSettings(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "streaming":
+				return ec.fieldContext_KeepAliveSettings_streaming(ctx, field)
+			case "nonStreaming":
+				return ec.fieldContext_KeepAliveSettings_nonStreaming(ctx, field)
+			case "usingServerDefaults":
+				return ec.fieldContext_KeepAliveSettings_usingServerDefaults(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type KeepAliveSettings", field.Name)
 		},
 	}
 	return fc, nil
@@ -93267,6 +93616,74 @@ func (ec *executionContext) unmarshalInputUpdateDefaultDataStorageInput(ctx cont
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputUpdateKeepAliveConfigInput(ctx context.Context, obj any) (biz.KeepAliveConfig, error) {
+	var it biz.KeepAliveConfig
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"enabled", "intervalSeconds"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "enabled":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("enabled"))
+			data, err := ec.unmarshalNBoolean2bool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Enabled = data
+		case "intervalSeconds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("intervalSeconds"))
+			data, err := ec.unmarshalNFloat2float64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.IntervalSeconds = data
+		}
+	}
+
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputUpdateKeepAliveInput(ctx context.Context, obj any) (biz.KeepAliveSettings, error) {
+	var it biz.KeepAliveSettings
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"streaming", "nonStreaming"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "streaming":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("streaming"))
+			data, err := ec.unmarshalNUpdateKeepAliveConfigInput2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐKeepAliveConfig(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Streaming = data
+		case "nonStreaming":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("nonStreaming"))
+			data, err := ec.unmarshalNUpdateKeepAliveConfigInput2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐKeepAliveConfig(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.NonStreaming = data
+		}
+	}
+
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputUpdateMeInput(ctx context.Context, obj any) (UpdateMeInput, error) {
 	var it UpdateMeInput
 	asMap := map[string]any{}
@@ -105607,6 +106024,99 @@ func (ec *executionContext) _InitializeSystemPayload(ctx context.Context, sel as
 	return out
 }
 
+var keepAliveConfigImplementors = []string{"KeepAliveConfig"}
+
+func (ec *executionContext) _KeepAliveConfig(ctx context.Context, sel ast.SelectionSet, obj *biz.KeepAliveConfig) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, keepAliveConfigImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("KeepAliveConfig")
+		case "enabled":
+			out.Values[i] = ec._KeepAliveConfig_enabled(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "intervalSeconds":
+			out.Values[i] = ec._KeepAliveConfig_intervalSeconds(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var keepAliveSettingsImplementors = []string{"KeepAliveSettings"}
+
+func (ec *executionContext) _KeepAliveSettings(ctx context.Context, sel ast.SelectionSet, obj *biz.KeepAliveSettings) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, keepAliveSettingsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("KeepAliveSettings")
+		case "streaming":
+			out.Values[i] = ec._KeepAliveSettings_streaming(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nonStreaming":
+			out.Values[i] = ec._KeepAliveSettings_nonStreaming(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "usingServerDefaults":
+			out.Values[i] = ec._KeepAliveSettings_usingServerDefaults(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var modelImplementors = []string{"Model", "Node"}
 
 func (ec *executionContext) _Model(ctx context.Context, sel ast.SelectionSet, obj *ent.Model) graphql.Marshaler {
@@ -107487,6 +107997,20 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "resetClaudeCodeSafeguardsSettings":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_resetClaudeCodeSafeguardsSettings(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "updateKeepAliveSettings":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_updateKeepAliveSettings(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "resetKeepAliveSettings":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_resetKeepAliveSettings(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -113056,6 +113580,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_claudeCodeSafeguardsSettings(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "keepAliveSettings":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_keepAliveSettings(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -124007,6 +124553,24 @@ func (ec *executionContext) marshalNJSONRawMessageInput2githubᚗcomᚋloopljᚋ
 	return v
 }
 
+func (ec *executionContext) marshalNKeepAliveConfig2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐKeepAliveConfig(ctx context.Context, sel ast.SelectionSet, v biz.KeepAliveConfig) graphql.Marshaler {
+	return ec._KeepAliveConfig(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNKeepAliveSettings2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐKeepAliveSettings(ctx context.Context, sel ast.SelectionSet, v biz.KeepAliveSettings) graphql.Marshaler {
+	return ec._KeepAliveSettings(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNKeepAliveSettings2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐKeepAliveSettings(ctx context.Context, sel ast.SelectionSet, v *biz.KeepAliveSettings) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._KeepAliveSettings(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNLoadApiKeyProfileTemplateInput2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋgqlᚐLoadAPIKeyProfileTemplateInput(ctx context.Context, v any) (LoadAPIKeyProfileTemplateInput, error) {
 	res, err := ec.unmarshalInputLoadApiKeyProfileTemplateInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -127535,6 +128099,16 @@ func (ec *executionContext) unmarshalNUpdateDataStorageInput2githubᚗcomᚋloop
 
 func (ec *executionContext) unmarshalNUpdateDefaultDataStorageInput2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋgqlᚐUpdateDefaultDataStorageInput(ctx context.Context, v any) (UpdateDefaultDataStorageInput, error) {
 	res, err := ec.unmarshalInputUpdateDefaultDataStorageInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNUpdateKeepAliveConfigInput2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐKeepAliveConfig(ctx context.Context, v any) (biz.KeepAliveConfig, error) {
+	res, err := ec.unmarshalInputUpdateKeepAliveConfigInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNUpdateKeepAliveInput2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐKeepAliveSettings(ctx context.Context, v any) (biz.KeepAliveSettings, error) {
+	res, err := ec.unmarshalInputUpdateKeepAliveInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 

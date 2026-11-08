@@ -100,7 +100,7 @@ func TestResponsesStream_HTTPReset_when_ContentDelivered(t *testing.T) {
 							return
 						}
 					}
-					h.writeSSEStream(c, stream)
+					h.writeSSEStream(c, stream, h.sseKeepAlive)
 				}))
 				t.Cleanup(gateway.Close)
 				client := &http.Client{Timeout: 10 * time.Second}
@@ -164,7 +164,7 @@ func TestResponsesStream_Policy_when_ConversionFailed(t *testing.T) {
 			h := &ChatCompletionHandlers{streamAdapterFactory: newResponsesStreamAdapter, ChatCompletionOrchestrator: &orchestrator.ChatCompletionOrchestrator{SystemService: svc}}
 			stream := &errorAfterStream{items: []*httpclient.StreamEvent{{Type: "response.failed", Data: []byte(`{"type":"response.failed","sequence_number":8,"response":{"id":"resp_policy","status":"failed","output":[],"error":{"code":"stream_error","message":"private upstream detail"}}}`)}}}
 			// When
-			h.writeSSEStream(c, stream)
+			h.writeSSEStream(c, stream, h.sseKeepAlive)
 			// Then the configured safe message replaces only the upstream message.
 			require.NotContains(t, w.Body.String(), "private upstream detail")
 			require.Contains(t, w.Body.String(), "resp_policy")
