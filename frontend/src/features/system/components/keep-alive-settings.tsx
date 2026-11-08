@@ -228,7 +228,7 @@ function KeepAliveSettingsForm() {
                   <AlertDialogDescription>{t('system.keepAlive.resetConfirmDescription')}</AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+                  <AlertDialogCancel>{t('common.buttons.cancel')}</AlertDialogCancel>
                   <AlertDialogAction
                     data-testid='keep-alive-reset-confirm'
                     onClick={() => {
@@ -240,7 +240,7 @@ function KeepAliveSettingsForm() {
                       });
                     }}
                   >
-                    {t('common.confirm')}
+                    {t('common.buttons.confirm')}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -265,7 +265,7 @@ function KeepAliveSettingsForm() {
                   <AlertDialogDescription>{t('system.keepAlive.saveConfirmDescription')}</AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+                  <AlertDialogCancel>{t('common.buttons.cancel')}</AlertDialogCancel>
                   <AlertDialogAction
                     data-testid='keep-alive-save-confirm'
                     onClick={() => {
@@ -277,7 +277,7 @@ function KeepAliveSettingsForm() {
                       });
                     }}
                   >
-                    {t('common.confirm')}
+                    {t('common.buttons.confirm')}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>

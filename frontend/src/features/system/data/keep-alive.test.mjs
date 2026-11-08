@@ -59,3 +59,28 @@ test('keepAlive translations match in both locales', () => {
     assert.equal(typeof zh[key], 'string', `Missing translation for ${key} in zh-CN`);
   }
 });
+
+// Regression tripwire: every literal t('...') key used by the settings
+// component must resolve in both locales (catches references to shared keys
+// like common.buttons.* that do not exist, which render as raw keys in UI).
+test('keep-alive-settings component keys resolve in both locales', () => {
+  const root = join(import.meta.dirname, '..');
+  const component = readFileSync(join(root, 'components/keep-alive-settings.tsx'), 'utf8');
+  const used = [...component.matchAll(/\bt\('([a-zA-Z.]+)'\)/g)].map((m) => m[1]);
+  assert.ok(used.length >= 20, `Expected >= 20 t() keys, got ${used.length}`);
+
+  const loadLocale = (lang) =>
+    Object.assign(
+      {},
+      ...['base', 'system'].map((file) =>
+        JSON.parse(readFileSync(join(root, `../../locales/${lang}/${file}.json`), 'utf8'))
+      )
+    );
+  const locales = { en: loadLocale('en'), 'zh-CN': loadLocale('zh-CN') };
+
+  for (const key of new Set(used)) {
+    for (const [lang, table] of Object.entries(locales)) {
+      assert.equal(typeof table[key], 'string', `Key ${key} used by keep-alive-settings is missing in ${lang}`);
+    }
+  }
+});
