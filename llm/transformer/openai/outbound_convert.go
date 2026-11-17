@@ -420,8 +420,11 @@ func ToolFromLLM(t llm.Tool) Tool {
 		Function: Function{
 			Name:        t.Function.Name,
 			Description: t.Function.Description,
-			Parameters:  t.Function.Parameters,
-			Strict:      t.Function.Strict,
+			// Never emit "parameters": null — OpenAI-compat relays may forward
+			// it verbatim to Gemini, which requires a record. No-argument
+			// tools get the empty object schema (strict-mode compatible).
+			Parameters: llm.NormalizeFunctionParameters(t.Function.Parameters, t.Function.Strict),
+			Strict:     t.Function.Strict,
 		},
 	}
 }

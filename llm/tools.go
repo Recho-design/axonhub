@@ -1,11 +1,55 @@
 package llm
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
 )
+
+// EmptyObjectSchema is the JSON Schema for a no-argument function: an object
+// with no properties. Schema-strict providers (notably Gemini, which rejects a
+// null parameters with "expected record, received null") require an object.
+var EmptyObjectSchema = json.RawMessage(`{"type":"object","properties":{}}`)
+
+// StrictEmptyObjectSchema is EmptyObjectSchema made strict-mode compatible:
+// OpenAI's structured-output validator requires additionalProperties: false
+// and a required array listing every key (none, here) even for empty objects.
+var StrictEmptyObjectSchema = json.RawMessage(`{"type":"object","properties":{},"required":[],"additionalProperties":false}`)
+
+// NormalizeEmptySchema returns schema unchanged unless it is nil, blank, or the
+// literal JSON null, in which case it returns EmptyObjectSchema. Clients
+// frequently declare no-argument tools with "parameters": null or with the
+// field omitted; forwarding that null verbatim breaks upstreams (e.g.
+// OpenAI-compat relays in front of Gemini) whose validation expects a record.
+func NormalizeEmptySchema(schema json.RawMessage) json.RawMessage {
+	if isEmptySchema(schema) {
+		return EmptyObjectSchema
+	}
+	return schema
+}
+
+// NormalizeFunctionParameters normalizes an OpenAI-style function parameters
+// schema for outbound requests. nil, blank, and literal JSON null become
+// EmptyObjectSchema — or StrictEmptyObjectSchema when the tool is in strict
+// mode, whose validator rejects a schema lacking additionalProperties: false.
+// Valid schemas pass through unchanged.
+func NormalizeFunctionParameters(schema json.RawMessage, strict *bool) json.RawMessage {
+	if !isEmptySchema(schema) {
+		return schema
+	}
+	if strict != nil && *strict {
+		return StrictEmptyObjectSchema
+	}
+	return EmptyObjectSchema
+}
+
+// isEmptySchema reports whether schema is nil, blank, or the literal JSON null.
+func isEmptySchema(schema json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(schema)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
+}
 
 // Tool represents a function tool.
 type Tool struct {

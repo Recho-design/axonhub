@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/samber/lo"
@@ -722,4 +723,34 @@ func TestConvertToGeminiUsage_BidirectionalConsistency(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConvertLLMToGeminiRequest_NullToolParameters(t *testing.T) {
+	// A literal JSON null in Function.Parameters is non-nil and must not be
+	// forwarded: Gemini validates parametersJsonSchema as a record and rejects
+	// null with "expected record, received null".
+	req := &llm.Request{
+		Model: "gemini-2.0-flash",
+		Messages: []llm.Message{
+			{
+				Role: "user",
+				Content: llm.MessageContent{
+					Content: lo.ToPtr("Test"),
+				},
+			},
+		},
+		Tools: []llm.Tool{
+			{Type: "function", Function: llm.Function{Name: "tool_null", Parameters: json.RawMessage("null")}},
+			{Type: "function", Function: llm.Function{Name: "tool_schema", Parameters: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`)}},
+		},
+	}
+
+	result := convertLLMToGeminiRequest(req)
+	require.NotEmpty(t, result.Tools)
+	require.NotEmpty(t, result.Tools[0].FunctionDeclarations)
+
+	fds := result.Tools[0].FunctionDeclarations
+	require.Len(t, fds, 2)
+	require.JSONEq(t, `{"type":"object","properties":{}}`, string(fds[0].ParametersJsonSchema))
+	require.JSONEq(t, `{"type":"object","properties":{"q":{"type":"string"}}}`, string(fds[1].ParametersJsonSchema))
 }

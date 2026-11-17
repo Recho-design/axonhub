@@ -249,9 +249,11 @@ func convertLLMToGeminiRequestWithConfig(chatReq *llm.Request, config *Config) *
 				}
 
 				if tool.Function.ParametersJsonSchema != nil {
-					fd.ParametersJsonSchema = tool.Function.ParametersJsonSchema
+					// A literal JSON null is non-nil but must not be forwarded:
+					// Gemini validates parametersJsonSchema as a record.
+					fd.ParametersJsonSchema = llm.NormalizeEmptySchema(tool.Function.ParametersJsonSchema)
 				} else if tool.Function.Parameters != nil {
-					fd.ParametersJsonSchema = tool.Function.Parameters
+					fd.ParametersJsonSchema = llm.NormalizeEmptySchema(tool.Function.Parameters)
 				}
 
 				functionDeclarations = append(functionDeclarations, fd)

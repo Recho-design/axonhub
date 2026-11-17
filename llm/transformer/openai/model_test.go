@@ -347,3 +347,42 @@ func TestRoundTrip_AllowedToolsToolChoice(t *testing.T) {
 		`{"type":"allowed_tools","allowed_tools":{"mode":"required","tools":[{"type":"function","function":{"name":"tool_a"}}]}}`,
 		string(encoded.ToolChoice))
 }
+
+func TestRoundTrip_ToolParametersNullNormalized(t *testing.T) {
+	// Clients declare no-argument tools with "parameters": null or omit the
+	// field entirely. The outbound payload must never contain "parameters":
+	// null — OpenAI-compat relays in front of Gemini forward it verbatim and
+	// fail validation ("expected record, received null").
+	raw := `{
+		"model": "gpt-4o",
+		"messages": [{"role": "user", "content": "hi"}],
+		"tools": [
+			{"type": "function", "function": {"name": "tool_null", "parameters": null}},
+			{"type": "function", "function": {"name": "tool_missing"}},
+			{"type": "function", "function": {"name": "tool_schema", "parameters": {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}}},
+			{"type": "function", "function": {"name": "tool_strict", "parameters": null, "strict": true}}
+		]
+	}`
+
+	var original Request
+	require.NoError(t, json.Unmarshal([]byte(raw), &original))
+
+	roundTripped := RequestFromLLM(context.Background(), original.ToLLMRequest(), ReasoningFieldNone)
+	require.NotNil(t, roundTripped)
+
+	data, err := json.Marshal(roundTripped)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), `"parameters":null`)
+
+	var encoded struct {
+		Tools []Tool `json:"tools"`
+	}
+	require.NoError(t, json.Unmarshal(data, &encoded))
+	require.Len(t, encoded.Tools, 4)
+	require.JSONEq(t, `{"type":"object","properties":{}}`, string(encoded.Tools[0].Function.Parameters))
+	require.JSONEq(t, `{"type":"object","properties":{}}`, string(encoded.Tools[1].Function.Parameters))
+	require.JSONEq(t, `{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`, string(encoded.Tools[2].Function.Parameters))
+	require.JSONEq(t, `{"type":"object","properties":{},"required":[],"additionalProperties":false}`, string(encoded.Tools[3].Function.Parameters))
+	require.NotNil(t, encoded.Tools[3].Function.Strict)
+	require.True(t, *encoded.Tools[3].Function.Strict)
+}

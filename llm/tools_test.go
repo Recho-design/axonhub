@@ -1,8 +1,10 @@
 package llm_test
 
 import (
+	"encoding/json"
 	"testing"
 
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
 
 	"github.com/looplj/axonhub/llm"
@@ -217,6 +219,88 @@ func TestFilterGoogleNativeTools(t *testing.T) {
 
 				require.Equal(t, tt.wantType, gotTypes)
 			}
+		})
+	}
+}
+
+func TestNormalizeEmptySchema(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema json.RawMessage
+		want   json.RawMessage
+	}{
+		{
+			name:   "nil schema becomes empty object schema",
+			schema: nil,
+			want:   llm.EmptyObjectSchema,
+		},
+		{
+			name:   "blank schema becomes empty object schema",
+			schema: json.RawMessage("  "),
+			want:   llm.EmptyObjectSchema,
+		},
+		{
+			name:   "literal null becomes empty object schema",
+			schema: json.RawMessage("null"),
+			want:   llm.EmptyObjectSchema,
+		},
+		{
+			name:   "padded null becomes empty object schema",
+			schema: json.RawMessage(" null "),
+			want:   llm.EmptyObjectSchema,
+		},
+		{
+			name:   "valid schema passes through unchanged",
+			schema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`),
+			want:   json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.JSONEq(t, string(tt.want), string(llm.NormalizeEmptySchema(tt.schema)))
+		})
+	}
+}
+
+func TestNormalizeFunctionParameters(t *testing.T) {
+	validSchema := json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`)
+
+	tests := []struct {
+		name   string
+		schema json.RawMessage
+		strict *bool
+		want   json.RawMessage
+	}{
+		{
+			name:   "nil strict with null schema uses plain empty object schema",
+			schema: json.RawMessage("null"),
+			strict: nil,
+			want:   llm.EmptyObjectSchema,
+		},
+		{
+			name:   "strict false with null schema uses plain empty object schema",
+			schema: json.RawMessage("null"),
+			strict: lo.ToPtr(false),
+			want:   llm.EmptyObjectSchema,
+		},
+		{
+			name:   "strict true with null schema satisfies strict validation",
+			schema: json.RawMessage("null"),
+			strict: lo.ToPtr(true),
+			want:   llm.StrictEmptyObjectSchema,
+		},
+		{
+			name:   "strict true with valid schema passes through unchanged",
+			schema: validSchema,
+			strict: lo.ToPtr(true),
+			want:   validSchema,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.JSONEq(t, string(tt.want), string(llm.NormalizeFunctionParameters(tt.schema, tt.strict)))
 		})
 	}
 }
