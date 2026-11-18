@@ -16,9 +16,10 @@
 
 - `DefaultSelector.selectModelCandidates` 在候选生成后按模型健康稳定重排 `Models`：近期失败模型后置；同步重排 `modelAPIFormats` 并更新 `candidate.APIFormat`。`modelAPIFormats` 与 `Models` 长度不一致时跳过重排。
 - “近期失败”判定：`ConsecutiveFailures > 0` 且 `LastFailureAt` 在 `roundRobinHealthCooldown`（5 分钟）内；无时间戳视为近期失败。
-- 候选整体健康：仅当候选内**所有**可尝试模型都不健康时，才把候选判为不健康/降权；任一健康模型存在时不得整体降分。
-- ErrorAware 与 RoundRobinHealth 优先读候选当前模型指标；无模型上下文/提供者不支持时回退渠道级指标。
-- failover 与 round-robin 的健康过滤器都使用上述候选级判定；adaptive 通过 ErrorAware 软降权。
+- 每候选 metrics 快照由 `LoadBalancer.candidateMetrics(ctx, candidate)` 组合：渠道级快照的负载字段（RequestCount、延迟 EWMA）+ 候选首模型（`healthModelOf`）的 `ConsecutiveFailures`/`LastFailureAt`。策略通过 `Score/ScoreWithDebug` 的 metrics 参数读取，策略自身不再持有 provider。
+- 候选整体健康：模型重排保证首模型是候选内最健康的；组合快照携带首模型健康，`RoundRobinHealthStrategy.IsUnhealthy(metrics)` 对候选的判定等价于“重排后首模型不健康”。任一健康模型存在时不得整体降分。
+- ErrorAware 与 RoundRobinHealth 优先读组合快照中的模型级健康；provider 不支持模型级查询或候选无模型时回退渠道级字段。
+- failover 与 round-robin 的健康过滤器都使用上述组合快照判定；adaptive 通过 ErrorAware 软降权。
 
 ## AttemptSeq 所有权
 

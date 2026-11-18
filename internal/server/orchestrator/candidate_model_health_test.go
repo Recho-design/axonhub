@@ -160,7 +160,7 @@ func TestErrorAwareStrategyUsesCandidateModelMetrics(t *testing.T) {
 	// The composed snapshot replaces channel-level failures with the health
 	// of the candidate's first model, so a healthy model scores full marks
 	// even on a failing channel.
-	composed, err := lb.candidateMetrics(contextWithCandidateModel(context.Background(), "gpta"), modelHealthCandidate(1, "gpta"))
+	composed, err := lb.candidateMetrics(context.Background(), modelHealthCandidate(1, "gpta"))
 	require.NoError(t, err)
 	assert.Equal(t, 200.0, strategy.Score(context.Background(), channel, composed))
 
