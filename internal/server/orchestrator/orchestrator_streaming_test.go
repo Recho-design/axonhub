@@ -497,8 +497,10 @@ func TestChatCompletionOrchestrator_Process_Streaming(t *testing.T) {
 	err = result.ChatCompletionStream.Close()
 	require.NoError(t, err)
 
-	// Verify chunks were received
-	assert.Len(t, chunks, 4)
+	// Verify chunks were received. The upstream terminal chunk (finish_reason
+	// + usage glued together) is normalized into two frames: finish first, then
+	// a choices-free usage chunk, per stream_options.include_usage semantics.
+	assert.Len(t, chunks, 5)
 
 	// Verify request was created in database
 	requests, err := client.Request.Query().All(ctx)

@@ -586,7 +586,8 @@ func TestInboundTransformer_TransformStream_SkipsPureReasoningSignatureChunk(t *
 	}
 
 	require.NoError(t, stream.Err())
-	require.Len(t, events, 2)
+	// tool_calls delta frame, standalone finish frame, then [DONE].
+	require.Len(t, events, 3)
 
 	var chunkResp Response
 	require.NoError(t, json.Unmarshal(events[0].Data, &chunkResp))
@@ -594,7 +595,16 @@ func TestInboundTransformer_TransformStream_SkipsPureReasoningSignatureChunk(t *
 	require.NotNil(t, chunkResp.Choices[0].Delta)
 	require.Len(t, chunkResp.Choices[0].Delta.ToolCalls, 1)
 	require.Nil(t, chunkResp.Choices[0].Delta.ToolCalls[0].ExtraContent)
-	require.Equal(t, "[DONE]", string(events[1].Data))
+	// Deltas never carry finish_reason.
+	require.Nil(t, chunkResp.Choices[0].FinishReason)
+
+	var finishResp Response
+	require.NoError(t, json.Unmarshal(events[1].Data, &finishResp))
+	require.Len(t, finishResp.Choices, 1)
+	require.Equal(t, "tool_calls", lo.FromPtr(finishResp.Choices[0].FinishReason))
+	require.NotNil(t, finishResp.Choices[0].Delta)
+	require.Empty(t, finishResp.Choices[0].Delta.ToolCalls)
+	require.Equal(t, "[DONE]", string(events[2].Data))
 }
 
 func TestInboundTransformer_TransformResponse(t *testing.T) {
