@@ -153,15 +153,21 @@ func TestErrorAwareStrategyUsesCandidateModelMetrics(t *testing.T) {
 			{channelID: 1, modelID: "gpta"}: {},
 		},
 	}
-	strategy := NewErrorAwareStrategy(provider)
+	lb := NewLoadBalancer(provider, nil)
+	strategy := NewErrorAwareStrategy()
 	channel := &biz.Channel{Channel: &ent.Channel{ID: 1, Name: "test"}}
 
-	modelCtx := contextWithCandidateModel(context.Background(), "gpta")
-	assert.Equal(t, 200.0, strategy.Score(modelCtx, channel))
-	debugScore, details := strategy.ScoreWithDebug(modelCtx, channel)
-	assert.Equal(t, 200.0, debugScore)
-	assert.Equal(t, "gpta", details.Details["model"])
-	assert.Equal(t, 70.0, strategy.Score(context.Background(), channel))
+	// The composed snapshot replaces channel-level failures with the health
+	// of the candidate's first model, so a healthy model scores full marks
+	// even on a failing channel.
+	composed, err := lb.candidateMetrics(contextWithCandidateModel(context.Background(), "gpta"), modelHealthCandidate(1, "gpta"))
+	require.NoError(t, err)
+	assert.Equal(t, 200.0, strategy.Score(context.Background(), channel, composed))
+
+	// Without a candidate the channel-level failures apply.
+	channelMetrics, err := lb.channelMetrics(context.Background(), channel)
+	require.NoError(t, err)
+	assert.Equal(t, 70.0, strategy.Score(context.Background(), channel, channelMetrics))
 }
 
 func TestRoundRobinHealthStrategyUsesHealthyModelWithinCandidate(t *testing.T) {
@@ -179,13 +185,33 @@ func TestRoundRobinHealthStrategyUsesHealthyModelWithinCandidate(t *testing.T) {
 			{channelID: 2, modelID: "failed-b"}: failed,
 		},
 	}
-	strategy := NewRoundRobinHealthStrategy(provider)
+	lb := NewLoadBalancer(provider, nil)
+	strategy := NewRoundRobinHealthStrategy()
+	ctx := context.Background()
 
-	assert.False(t, strategy.IsUnhealthy(context.Background(), modelHealthCandidate(1, "failed", "healthy")))
-	assert.True(t, strategy.IsUnhealthy(context.Background(), modelHealthCandidate(2, "failed-a", "failed-b")))
-	assert.True(t, strategy.IsUnhealthy(context.Background(), &ChannelModelsCandidate{
+	// Health ordering runs before the load balancer, so the healthy model of a
+	// mixed candidate is attempted first and the snapshot reflects it: the
+	// candidate is not unhealthy.
+	mixed := modelHealthCandidate(1, "failed", "healthy")
+	orderCandidateModelsByHealth(ctx, provider, []*ChannelModelsCandidate{mixed})
+	composed, err := lb.candidateMetrics(ctx, mixed)
+	require.NoError(t, err)
+	assert.False(t, strategy.IsUnhealthy(composed))
+
+	// All models failing keeps the candidate unhealthy.
+	allFailing := modelHealthCandidate(2, "failed-a", "failed-b")
+	orderCandidateModelsByHealth(ctx, provider, []*ChannelModelsCandidate{allFailing})
+	composed, err = lb.candidateMetrics(ctx, allFailing)
+	require.NoError(t, err)
+	assert.True(t, strategy.IsUnhealthy(composed))
+
+	// A candidate without models falls back to channel-level health.
+	bare := &ChannelModelsCandidate{
 		Channel: &biz.Channel{Channel: &ent.Channel{ID: 3}},
-	}))
+	}
+	composed, err = lb.candidateMetrics(ctx, bare)
+	require.NoError(t, err)
+	assert.True(t, strategy.IsUnhealthy(composed))
 }
 
 func TestModelHealthScenarioPrefersHealthyModelAndPenalizesFailedOnlyCandidate(t *testing.T) {
@@ -196,14 +222,20 @@ func TestModelHealthScenarioPrefersHealthyModelAndPenalizesFailedOnlyCandidate(t
 			{channelID: 2, modelID: "gptc"}: modelHealthMetrics(1, nil),
 		},
 	}
+	lb := NewLoadBalancer(provider, nil)
+	strategy := NewErrorAwareStrategy()
 	candidate := modelHealthCandidate(1, "gptb", "gpta")
 	failedOnly := modelHealthCandidate(2, "gptc")
-	orderCandidateModelsByHealth(context.Background(), provider, []*ChannelModelsCandidate{candidate, failedOnly})
+	ctx := context.Background()
+	orderCandidateModelsByHealth(ctx, provider, []*ChannelModelsCandidate{candidate, failedOnly})
 
 	assert.Equal(t, "gpta", healthModelOf(candidate))
-	strategy := NewErrorAwareStrategy(provider)
-	channelOneScore := strategy.Score(contextWithCandidateModel(context.Background(), healthModelOf(candidate)), candidate.Channel)
-	channelTwoScore := strategy.Score(contextWithCandidateModel(context.Background(), healthModelOf(failedOnly)), failedOnly.Channel)
+	composedOne, err := lb.candidateMetrics(ctx, candidate)
+	require.NoError(t, err)
+	composedTwo, err := lb.candidateMetrics(ctx, failedOnly)
+	require.NoError(t, err)
+	channelOneScore := strategy.Score(ctx, candidate.Channel, composedOne)
+	channelTwoScore := strategy.Score(ctx, failedOnly.Channel, composedTwo)
 
 	assert.Equal(t, 200.0, channelOneScore)
 	assert.Equal(t, 130.0, channelTwoScore)

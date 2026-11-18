@@ -754,3 +754,17 @@ func TestConvertLLMToGeminiRequest_NullToolParameters(t *testing.T) {
 	require.JSONEq(t, `{"type":"object","properties":{}}`, string(fds[0].ParametersJsonSchema))
 	require.JSONEq(t, `{"type":"object","properties":{"q":{"type":"string"}}}`, string(fds[1].ParametersJsonSchema))
 }
+
+func TestConvertToLLMUsage_ToolUsePromptTokens(t *testing.T) {
+	usage := convertToLLMUsage(&UsageMetadata{
+		PromptTokenCount:        100,
+		ToolUsePromptTokenCount: 40,
+		CandidatesTokenCount:    10,
+		ThoughtsTokenCount:      5,
+		TotalTokenCount:         155,
+	})
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(140), usage.PromptTokens)
+	assert.Equal(t, int64(15), usage.CompletionTokens)
+	assert.Equal(t, int64(155), usage.TotalTokens)
+}

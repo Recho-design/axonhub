@@ -282,7 +282,7 @@ func (r *mutationResolver) CheckProviderQuotas(ctx context.Context) (bool, error
 }
 
 // ResetChannelQuotaNow is the resolver for the resetChannelQuotaNow field.
-func (r *mutationResolver) ResetChannelQuotaNow(ctx context.Context, channelID objects.GUID) (bool, error) {
+func (r *mutationResolver) ResetChannelQuotaNow(ctx context.Context, channelID objects.GUID, resetID *string) (bool, error) {
 	if !scopes.UserHasScope(ctx, scopes.ScopeWriteChannels) {
 		return false, fmt.Errorf("permission denied: requires write:channels scope")
 	}
@@ -291,7 +291,7 @@ func (r *mutationResolver) ResetChannelQuotaNow(ctx context.Context, channelID o
 		return false, fmt.Errorf("provider quota service is not available")
 	}
 
-	if err := r.providerQuotaService.ResetChannelQuotaNow(ctx, channelID.ID); err != nil {
+	if err := r.providerQuotaService.ResetChannelQuotaNow(ctx, channelID.ID, lo.FromPtr(resetID)); err != nil {
 		return false, fmt.Errorf("failed to reset channel quota: %w", err)
 	}
 
@@ -381,38 +381,15 @@ func (r *mutationResolver) UpdateCatalogSettings(ctx context.Context, input Upda
 		settings.UpstreamURL = *input.UpstreamURL
 	}
 
-	if input.RefreshSeconds != nil {
-		settings.RefreshSeconds = *input.RefreshSeconds
-	}
-
 	if err := r.systemService.SetCatalogSettings(ctx, settings); err != nil {
 		return false, fmt.Errorf("failed to update catalog settings: %w", err)
 	}
 
 	if r.catalogService != nil {
 		r.catalogService.Invalidate()
-		r.catalogService.Reschedule(ctx, r.scheduler)
 	}
 
 	return true, nil
-}
-
-// RefreshProvidersCatalog is the resolver for the refreshProvidersCatalog field.
-func (r *mutationResolver) RefreshProvidersCatalog(ctx context.Context) (*ProvidersCatalog, error) {
-	if !scopes.UserHasScope(ctx, scopes.ScopeWriteSettings) {
-		return nil, fmt.Errorf("permission denied: requires write_settings scope")
-	}
-
-	if r.catalogService == nil {
-		return nil, fmt.Errorf("catalog service is not configured")
-	}
-
-	snapshot, err := r.catalogService.Refresh(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to refresh providers catalog: %w", err)
-	}
-
-	return providersCatalogFromSnapshot(snapshot), nil
 }
 
 // ClearCache is the resolver for the clearCache field.

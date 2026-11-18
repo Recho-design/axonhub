@@ -37,26 +37,23 @@ func latestActivityAt(metrics *biz.AggregatedMetrics) *time.Time {
 // Channels with fewer historical requests get higher priority to ensure even load distribution.
 // This strategy is particularly effective when combined with other strategies in a composite approach.
 type RoundRobinStrategy struct {
-	metricsProvider ChannelMetricsProvider
 	// maxScore is the maximum score for a channel with zero requests (default: 150)
 	maxScore float64
 }
 
 // NewRoundRobinStrategy creates a new round-robin load balancing strategy.
 // This strategy implements true round-robin by prioritizing channels with fewer historical requests.
-func NewRoundRobinStrategy(metricsProvider ChannelMetricsProvider) *RoundRobinStrategy {
+func NewRoundRobinStrategy() *RoundRobinStrategy {
 	return &RoundRobinStrategy{
-		metricsProvider: metricsProvider,
-		maxScore:        150.0,
+		maxScore: 150.0,
 	}
 }
 
 // Score returns a priority score based on the channel's historical request count.
 // Production path without debug logging.
 // Channels with fewer requests receive higher scores to promote even distribution.
-func (s *RoundRobinStrategy) Score(ctx context.Context, channel *biz.Channel) float64 {
-	metrics, err := s.metricsProvider.GetChannelMetrics(ctx, channel.ID)
-	if err != nil {
+func (s *RoundRobinStrategy) Score(_ context.Context, _ *biz.Channel, metrics *biz.AggregatedMetrics) float64 {
+	if metrics == nil {
 		// If we can't get metrics, return a moderate score to be safe
 		return s.maxScore / 2
 	}
@@ -68,28 +65,21 @@ func (s *RoundRobinStrategy) Score(ctx context.Context, channel *biz.Channel) fl
 
 // ScoreWithDebug returns a priority score with detailed debug information.
 // Debug path with comprehensive logging.
-func (s *RoundRobinStrategy) ScoreWithDebug(ctx context.Context, channel *biz.Channel) (float64, StrategyScore) {
+func (s *RoundRobinStrategy) ScoreWithDebug(ctx context.Context, channel *biz.Channel, metrics *biz.AggregatedMetrics) (float64, StrategyScore) {
 	log.Info(ctx, "RoundRobinStrategy: starting score calculation",
 		log.Int("channel_id", channel.ID),
 		log.String("channel_name", channel.Name),
 	)
 
-	metrics, err := s.metricsProvider.GetChannelMetrics(ctx, channel.ID)
-	if err != nil {
+	if metrics == nil {
 		// If we can't get metrics, return a moderate score to be safe
 		moderateScore := s.maxScore / 2
-		log.Warn(ctx, "RoundRobinStrategy: failed to get metrics, using moderate score",
-			log.Int("channel_id", channel.ID),
-			log.String("channel_name", channel.Name),
-			log.Cause(err),
-			log.Float64("moderate_score", moderateScore),
-		)
 
 		return moderateScore, StrategyScore{
 			StrategyName: s.Name(),
 			Score:        moderateScore,
 			Details: map[string]any{
-				"error": err.Error(),
+				"reason": metricsUnavailableReason,
 			},
 		}
 	}
@@ -158,16 +148,14 @@ func (s *RoundRobinStrategy) calculateScoreComponents(metrics *biz.AggregatedMet
 // round-robin candidates. It is intentionally only used by the round-robin
 // top-level strategy so adaptive balancing can keep its softer ErrorAware scoring.
 type RoundRobinHealthStrategy struct {
-	metricsProvider     ChannelMetricsProvider
 	failureThreshold    int64
 	failureCooldown     time.Duration
 	unhealthyPenalty    float64
 	metricsErrorPenalty float64
 }
 
-func NewRoundRobinHealthStrategy(metricsProvider ChannelMetricsProvider) *RoundRobinHealthStrategy {
+func NewRoundRobinHealthStrategy() *RoundRobinHealthStrategy {
 	return &RoundRobinHealthStrategy{
-		metricsProvider:     metricsProvider,
 		failureThreshold:    roundRobinFailureThreshold,
 		failureCooldown:     roundRobinHealthCooldown,
 		unhealthyPenalty:    rateLimitExhaustedScore,
@@ -175,33 +163,31 @@ func NewRoundRobinHealthStrategy(metricsProvider ChannelMetricsProvider) *RoundR
 	}
 }
 
-func (s *RoundRobinHealthStrategy) Score(ctx context.Context, channel *biz.Channel) float64 {
-	metrics, err := s.metricsFor(ctx, channel)
-	if err != nil {
+func (s *RoundRobinHealthStrategy) Score(_ context.Context, _ *biz.Channel, metrics *biz.AggregatedMetrics) float64 {
+	if metrics == nil {
 		return s.metricsErrorPenalty
 	}
 
-	if s.isUnhealthy(metrics) {
+	if s.IsUnhealthy(metrics) {
 		return s.unhealthyPenalty
 	}
 
 	return 0
 }
 
-func (s *RoundRobinHealthStrategy) ScoreWithDebug(ctx context.Context, channel *biz.Channel) (float64, StrategyScore) {
-	metrics, err := s.metricsFor(ctx, channel)
-	if err != nil {
+func (s *RoundRobinHealthStrategy) ScoreWithDebug(ctx context.Context, _ *biz.Channel, metrics *biz.AggregatedMetrics) (float64, StrategyScore) {
+	if metrics == nil {
 		return s.metricsErrorPenalty, StrategyScore{
 			StrategyName: s.Name(),
 			Score:        s.metricsErrorPenalty,
 			Details: map[string]any{
-				"error": err.Error(),
+				"reason": metricsUnavailableReason,
 			},
 		}
 	}
 
 	score := 0.0
-	unhealthy := s.isUnhealthy(metrics)
+	unhealthy := s.IsUnhealthy(metrics)
 	if unhealthy {
 		score = s.unhealthyPenalty
 	}
@@ -226,54 +212,16 @@ func (s *RoundRobinHealthStrategy) ScoreWithDebug(ctx context.Context, channel *
 	}
 }
 
-// metricsFor prefers the upstream-model health of the candidate being scored
-// and falls back to channel-level health when no model context is available.
-func (s *RoundRobinHealthStrategy) metricsFor(ctx context.Context, channel *biz.Channel) (*biz.AggregatedMetrics, error) {
-	if metrics, ok := modelMetricsFromContext(ctx, s.metricsProvider, channel.ID); ok {
-		return metrics, nil
-	}
-
-	return s.metricsProvider.GetChannelMetrics(ctx, channel.ID)
-}
-
 func (s *RoundRobinHealthStrategy) Name() string {
 	return "RoundRobinHealth"
 }
 
-func (s *RoundRobinHealthStrategy) IsUnhealthy(ctx context.Context, candidate *ChannelModelsCandidate) bool {
-	if candidate == nil || candidate.Channel == nil {
-		return false
-	}
-
-	modelProvider, supportsModelMetrics := s.metricsProvider.(ChannelModelMetricsProvider)
-	if supportsModelMetrics && len(candidate.Models) > 0 {
-		allModelsAvailable := true
-		for _, entry := range candidate.Models {
-			metrics, err := modelProvider.GetChannelModelMetrics(ctx, candidate.Channel.ID, entry.ActualModel)
-			if err != nil || metrics == nil {
-				allModelsAvailable = false
-				continue
-			}
-			if !s.isUnhealthy(metrics) {
-				return false
-			}
-		}
-		if allModelsAvailable {
-			return true
-		}
-	}
-
-	// The real provider returns an empty snapshot for an unknown model, so this
-	// fallback is only reachable for providers that cannot serve model metrics.
-	metrics, err := s.metricsProvider.GetChannelMetrics(ctx, candidate.Channel.ID)
-	if err != nil {
-		return false
-	}
-
-	return s.isUnhealthy(metrics)
-}
-
-func (s *RoundRobinHealthStrategy) isUnhealthy(metrics *biz.AggregatedMetrics) bool {
+// IsUnhealthy reports whether the channel has failed repeatedly within the
+// cooldown. Missing metrics count as healthy. The snapshot carries the
+// candidate's first-model health when per-model metrics are available, so this
+// also answers "is this candidate's retry list exhausted" for model-aware
+// providers.
+func (s *RoundRobinHealthStrategy) IsUnhealthy(metrics *biz.AggregatedMetrics) bool {
 	if metrics == nil || metrics.ConsecutiveFailures < s.failureThreshold {
 		return false
 	}
@@ -312,16 +260,14 @@ func (s *RoundRobinHealthStrategy) isUnhealthy(metrics *biz.AggregatedMetrics) b
 // The score stays strictly decreasing at every request count, including high
 // volume, while the sliding window owns all load expiration.
 type WeightRoundRobinStrategy struct {
-	metricsProvider ChannelMetricsProvider
 	// maxScore is the maximum score for a channel (default: 150)
 	maxScore float64
 }
 
 // NewWeightRoundRobinStrategy creates a new weighted round-robin strategy.
-func NewWeightRoundRobinStrategy(metricsProvider ChannelMetricsProvider) *WeightRoundRobinStrategy {
+func NewWeightRoundRobinStrategy() *WeightRoundRobinStrategy {
 	return &WeightRoundRobinStrategy{
-		metricsProvider: metricsProvider,
-		maxScore:        150.0,
+		maxScore: 150.0,
 	}
 }
 
@@ -366,9 +312,8 @@ func (s *WeightRoundRobinStrategy) calculateScore(metrics *biz.AggregatedMetrics
 
 // Score returns a weighted round-robin score.
 // Production path without debug logging.
-func (s *WeightRoundRobinStrategy) Score(ctx context.Context, channel *biz.Channel) float64 {
-	metrics, err := s.metricsProvider.GetChannelMetrics(ctx, channel.ID)
-	if err != nil {
+func (s *WeightRoundRobinStrategy) Score(_ context.Context, channel *biz.Channel, metrics *biz.AggregatedMetrics) float64 {
+	if metrics == nil {
 		// If we can't get metrics, return a moderate score
 		return s.maxScore / 2
 	}
@@ -380,30 +325,22 @@ func (s *WeightRoundRobinStrategy) Score(ctx context.Context, channel *biz.Chann
 
 // ScoreWithDebug returns a weighted round-robin score with detailed debug information.
 // Debug path with comprehensive logging.
-func (s *WeightRoundRobinStrategy) ScoreWithDebug(ctx context.Context, channel *biz.Channel) (float64, StrategyScore) {
+func (s *WeightRoundRobinStrategy) ScoreWithDebug(ctx context.Context, channel *biz.Channel, metrics *biz.AggregatedMetrics) (float64, StrategyScore) {
 	log.Info(ctx, "WeightRoundRobinStrategy: starting score calculation",
 		log.Int("channel_id", channel.ID),
 		log.String("channel_name", channel.Name),
 		log.Int("ordering_weight", channel.OrderingWeight),
 	)
 
-	metrics, err := s.metricsProvider.GetChannelMetrics(ctx, channel.ID)
-	if err != nil {
+	if metrics == nil {
 		// If we can't get metrics, return a moderate score
 		moderateScore := s.maxScore / 2
-
-		log.Warn(ctx, "WeightRoundRobinStrategy: failed to get metrics, using moderate score",
-			log.Int("channel_id", channel.ID),
-			log.String("channel_name", channel.Name),
-			log.Cause(err),
-			log.Float64("moderate_score", moderateScore),
-		)
 
 		return moderateScore, StrategyScore{
 			StrategyName: s.Name(),
 			Score:        moderateScore,
 			Details: map[string]any{
-				"error": err.Error(),
+				"reason": metricsUnavailableReason,
 			},
 		}
 	}

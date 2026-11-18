@@ -73,11 +73,10 @@ func contentErrorMatcherKey(patterns []objects.RetryableErrorPattern) string {
 // the caller receives; scanning the buffered body here closes that gap.
 func contentErrorDetectionMiddleware(
 	outbound *PersistentOutboundTransformer,
-	systemService *biz.SystemService,
 	matcher *pipeline.ContentErrorMatcher,
 ) pipeline.Middleware {
 	return pipeline.OnInboundRawResponse("pass-through-content-error-detection", func(ctx context.Context, response *httpclient.Response) (*httpclient.Response, error) {
-		if matcher == nil || response == nil || !outbound.passThroughResponseEnabled(ctx, systemService) {
+		if matcher == nil || response == nil || !outbound.passThroughResponseEnabled(ctx) {
 			return response, nil
 		}
 
