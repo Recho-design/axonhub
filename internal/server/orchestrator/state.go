@@ -89,6 +89,14 @@ type PersistenceState struct {
 	// success: it must not trigger channel failure counts or auto-disable rules.
 	Perf *biz.PerformanceRecord
 
+	// perfPublishMu guards the publish ownership of the current attempt. Stream
+	// finalization and the pipeline error callback can both observe one attempt;
+	// only the first publish per attempt and outcome reaches the metrics worker.
+	perfPublishMu       sync.Mutex
+	perfPublished       bool
+	perfPublishedSeq    uint64
+	perfPublishedResult bool
+
 	// StreamCompleted tracks a successful generation outcome, not channel health.
 	// A recognized incomplete terminal keeps this false and is persisted as Failed
 	// on both request and execution, even though Perf.Success is true. This does

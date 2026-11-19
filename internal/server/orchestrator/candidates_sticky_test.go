@@ -2,7 +2,9 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
@@ -37,6 +39,55 @@ func stickyTestCandidate(channelID, priority int) *ChannelModelsCandidate {
 		},
 		Priority: priority,
 	}
+}
+
+// stickyTestCandidateWithModels builds a candidate whose health-ordered retry
+// list is exactly models.
+func stickyTestCandidateWithModels(channelID, priority int, models ...string) *ChannelModelsCandidate {
+	candidate := stickyTestCandidate(channelID, priority)
+	for _, model := range models {
+		candidate.Models = append(candidate.Models, biz.ChannelModelEntry{ActualModel: model})
+	}
+
+	return candidate
+}
+
+// modelHealthMetricsProvider exposes both channel-level and model-level health
+// so tests can drive candidateMetrics' composed snapshot.
+type modelHealthMetricsProvider struct {
+	channelMetrics map[int]*biz.AggregatedMetrics
+	modelMetrics   map[string]*biz.AggregatedMetrics
+}
+
+func (p *modelHealthMetricsProvider) GetChannelMetrics(_ context.Context, channelID int) (*biz.AggregatedMetrics, error) {
+	if metrics, ok := p.channelMetrics[channelID]; ok {
+		return metrics, nil
+	}
+
+	return &biz.AggregatedMetrics{}, nil
+}
+
+func (p *modelHealthMetricsProvider) GetChannelModelMetrics(_ context.Context, channelID int, modelID string) (*biz.AggregatedMetrics, error) {
+	if metrics, ok := p.modelMetrics[modelHealthTestKey(channelID, modelID)]; ok {
+		return metrics, nil
+	}
+
+	return &biz.AggregatedMetrics{}, nil
+}
+
+func modelHealthTestKey(channelID int, modelID string) string {
+	return fmt.Sprintf("%d|%s", channelID, modelID)
+}
+
+// unhealthyTestMetrics mirrors a model that hit the failure threshold recently
+// enough to stay inside the cooldown window.
+func unhealthyTestMetrics() *biz.AggregatedMetrics {
+	metrics := &biz.AggregatedMetrics{}
+	metrics.ConsecutiveFailures = roundRobinFailureThreshold
+	failedAt := time.Now().Add(-time.Minute)
+	metrics.LastFailureAt = &failedAt
+
+	return metrics
 }
 
 func TestLoadBalancedSelector_TracksOnlyFinalTopCandidateAcrossPriorityGroups(t *testing.T) {
@@ -234,6 +285,114 @@ func TestLoadBalancedSelector_TraceStickySelection(t *testing.T) {
 		require.Len(t, result, 1)
 		require.Equal(t, 2, result[0].Channel.ID)
 		require.True(t, result[0].TraceSticky)
+	})
+
+	t.Run("unhealthy trace sticky channel falls back to load balancing", func(t *testing.T) {
+		metricsProvider := &modelHealthMetricsProvider{
+			modelMetrics: map[string]*biz.AggregatedMetrics{
+				modelHealthTestKey(2, "gpt-4"): unhealthyTestMetrics(),
+			},
+		}
+		tracker := &mockSelectionTracker{}
+		lb := NewLoadBalancer(metricsProvider, tracker, &channelBasedStrategy{
+			name:   "score",
+			scores: map[int]float64{1: 30, 2: 10},
+		})
+		candidates := []*ChannelModelsCandidate{
+			stickyTestCandidateWithModels(1, 0, "gpt-4"),
+			stickyTestCandidateWithModels(2, 0, "gpt-4"),
+		}
+		policy := &biz.RetryPolicy{
+			Enabled:           true,
+			MaxChannelRetries: 1,
+			TraceStickyMode:   biz.TraceStickyPreferPreviousChannel,
+		}
+		selector := WithTraceStickyLoadBalancedSelector(
+			&staticChannelSelector{candidates: candidates},
+			lb,
+			policy,
+			&fakePreviousChannelProvider{traceChannelIDs: map[int]int{trace.ID: 2}},
+		)
+
+		result, err := selector.Select(ctx, &llm.Request{Model: "gpt-4"})
+		require.NoError(t, err)
+		require.Equal(t, 1, result[0].Channel.ID)
+		require.False(t, result[0].TraceSticky)
+		require.Equal(t, 1, tracker.selections[1])
+		require.Zero(t, tracker.selections[2])
+	})
+
+	t.Run("unhealthy trace sticky channel falls back to healthy thread sticky channel", func(t *testing.T) {
+		metricsProvider := &modelHealthMetricsProvider{
+			modelMetrics: map[string]*biz.AggregatedMetrics{
+				modelHealthTestKey(2, "gpt-4"): unhealthyTestMetrics(),
+			},
+		}
+		tracker := &mockSelectionTracker{}
+		lb := NewLoadBalancer(metricsProvider, tracker)
+		candidates := []*ChannelModelsCandidate{
+			stickyTestCandidateWithModels(1, 0, "gpt-4"),
+			stickyTestCandidateWithModels(2, 0, "gpt-4"),
+			stickyTestCandidateWithModels(3, 0, "gpt-4"),
+		}
+		policy := &biz.RetryPolicy{
+			Enabled:           true,
+			MaxChannelRetries: 2,
+			TraceStickyMode:   biz.TraceStickyPreferPreviousChannel,
+		}
+		selector := WithTraceStickyLoadBalancedSelector(
+			&staticChannelSelector{candidates: candidates},
+			lb,
+			policy,
+			&fakePreviousChannelProvider{
+				traceChannelIDs:  map[int]int{trace.ID: 2},
+				threadChannelIDs: map[int]int{thread.ID: 3},
+			},
+		)
+
+		result, err := selector.Select(ctx, &llm.Request{Model: "gpt-4"})
+		require.NoError(t, err)
+		require.Equal(t, 3, result[0].Channel.ID)
+		require.True(t, result[0].TraceSticky)
+		require.Equal(t, 1, tracker.selections[3])
+	})
+
+	t.Run("healthy first model keeps sticky despite unhealthy channel metrics", func(t *testing.T) {
+		metricsProvider := &modelHealthMetricsProvider{
+			channelMetrics: map[int]*biz.AggregatedMetrics{
+				2: unhealthyTestMetrics(),
+			},
+			modelMetrics: map[string]*biz.AggregatedMetrics{
+				modelHealthTestKey(2, "healthy-model"): &biz.AggregatedMetrics{},
+				modelHealthTestKey(2, "failing-model"): unhealthyTestMetrics(),
+			},
+		}
+		tracker := &mockSelectionTracker{}
+		lb := NewLoadBalancer(metricsProvider, tracker, &channelBasedStrategy{
+			name:   "score",
+			scores: map[int]float64{1: 30, 2: 10},
+		})
+		candidates := []*ChannelModelsCandidate{
+			stickyTestCandidateWithModels(1, 0, "gpt-4"),
+			stickyTestCandidateWithModels(2, 1, "healthy-model", "failing-model"),
+		}
+		policy := &biz.RetryPolicy{
+			Enabled:           true,
+			MaxChannelRetries: 1,
+			TraceStickyMode:   biz.TraceStickyPreferPreviousChannel,
+		}
+		selector := WithTraceStickyLoadBalancedSelector(
+			&staticChannelSelector{candidates: candidates},
+			lb,
+			policy,
+			&fakePreviousChannelProvider{traceChannelIDs: map[int]int{trace.ID: 2}},
+		)
+
+		result, err := selector.Select(ctx, &llm.Request{Model: "gpt-4"})
+		require.NoError(t, err)
+		require.Equal(t, 2, result[0].Channel.ID)
+		require.True(t, result[0].TraceSticky)
+		require.Equal(t, 1, tracker.selections[2])
 	})
 }
 

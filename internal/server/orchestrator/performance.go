@@ -110,7 +110,7 @@ func (m *performanceRecording) OnOutboundLlmResponse(ctx context.Context, respon
 	}
 
 	m.outbound.state.Perf.MarkSuccess()
-	m.outbound.state.ChannelService.AsyncRecordPerformance(ctx, m.outbound.state.Perf)
+	publishPerformance(ctx, m.outbound.state, m.outbound.state.Perf)
 
 	return response, nil
 }
@@ -152,7 +152,10 @@ func (m *performanceRecording) OnOutboundRawError(ctx context.Context, err error
 		perf.MarkFailedWithMessage(errorCode, extractErrorMessageForMatching(err))
 	}
 
-	m.outbound.state.ChannelService.AsyncRecordPerformance(ctx, perf)
+	// Stream finalization may already have published this attempt. The helper
+	// keeps the same-outcome duplicate out while still letting a success that
+	// was marked before content detection be overridden by the failure.
+	publishPerformance(ctx, m.outbound.state, perf)
 }
 
 // recordPerformanceStream records performance metrics for a stream of responses.
@@ -249,14 +252,35 @@ func (s *recordPerformanceStream) Close() error {
 	return s.stream.Close()
 }
 
-// enqueueCompletedPerformance submits a completed stream only after its normalized
-// events have been consumed, so final usage is visible to the metrics worker.
-func enqueueCompletedPerformance(ctx context.Context, state *PersistenceState) {
-	if state == nil || state.Perf == nil || !state.Perf.RequestCompleted || state.ChannelService == nil {
+// publishPerformance submits the current attempt's completed record to the
+// metrics worker at most once per attempt and outcome. Stream finalization and
+// the pipeline error callback can both observe the same attempt — for example
+// when preReadLlmStream closes the stream and then reports the error — so an
+// unconditional enqueue would count one attempt twice. A changed outcome is
+// still published: the non-streaming content-error path marks the response
+// successful first and reclassifies it as failed afterwards.
+//
+// The queued value is a snapshot. The worker is asynchronous, so a later
+// reclassification of the same record must not rewrite an outcome that was
+// already submitted.
+func publishPerformance(ctx context.Context, state *PersistenceState, perf *biz.PerformanceRecord) {
+	if state == nil || state.ChannelService == nil || perf == nil || !perf.RequestCompleted {
 		return
 	}
 
-	state.ChannelService.AsyncRecordPerformance(ctx, state.Perf)
+	state.perfPublishMu.Lock()
+	if state.perfPublished && state.perfPublishedSeq == perf.AttemptSeq &&
+		state.perfPublishedResult == perf.Success {
+		state.perfPublishMu.Unlock()
+		return
+	}
+	state.perfPublished = true
+	state.perfPublishedSeq = perf.AttemptSeq
+	state.perfPublishedResult = perf.Success
+	snapshot := *perf
+	state.perfPublishMu.Unlock()
+
+	state.ChannelService.AsyncRecordPerformance(ctx, &snapshot)
 }
 
 func (s *recordPerformanceStream) Err() error {

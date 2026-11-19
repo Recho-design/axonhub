@@ -14,6 +14,8 @@ import (
 	"github.com/looplj/axonhub/internal/server/biz"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
+	"github.com/looplj/axonhub/llm/pipeline"
+	"github.com/looplj/axonhub/llm/streams"
 )
 
 func TestExtractErrorMessageForMatchingCapsResponseBody(t *testing.T) {
@@ -485,6 +487,189 @@ func TestPerformanceRecording_OnOutboundRawErrorOverridesCurrentAttemptSuccess(t
 	require.False(t, state.Perf.Success)
 	require.Equal(t, 500, state.Perf.ResponseStatusCode)
 	require.Equal(t, "gpt-a", state.Perf.Model)
+}
+
+// TestOutboundPersistentStream_TerminalEventPublishesPerformance guards the
+// stream finalization publish point. A stream that ends with a terminal event
+// finishes through persistResponseChunks, where content error detection may mark
+// the attempt failed after the terminal event already marked it successful. If
+// finalization skips enqueueCompletedPerformance, the record never reaches the
+// metrics worker, the model-level consecutive failure count stays at zero, and
+// the load balancer keeps selecting the failing channel.
+func TestOutboundPersistentStream_TerminalEventPublishesPerformance(t *testing.T) {
+	ctx, client := setupTest(t)
+	channelService := newTestChannelServiceForChannels(client)
+	ch := createTestChannel(t, ctx, client)
+
+	const model = "gpt-4"
+
+	// Seed a failure so the published success is observable: success resets the
+	// model's consecutive failure count.
+	now := time.Now()
+	channelService.RecordPerformance(ctx, &biz.PerformanceRecord{
+		ChannelID:          ch.ID,
+		Model:              model,
+		StartTime:          now.Add(-time.Second),
+		EndTime:            now,
+		Success:            false,
+		RequestCompleted:   true,
+		ResponseStatusCode: 502,
+	})
+
+	seeded, err := channelService.GetChannelModelMetrics(ctx, ch.ID, model)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), seeded.ConsecutiveFailures)
+
+	perf := &biz.PerformanceRecord{
+		ChannelID: ch.ID,
+		Model:     model,
+		StartTime: now,
+		Stream:    true,
+	}
+	ts := &OutboundPersistentStream{
+		ctx:             ctx,
+		stream:          streams.SliceStream([]*httpclient.StreamEvent{{Data: []byte("[DONE]")}}),
+		perf:            perf,
+		state:           &PersistenceState{Perf: perf, ChannelService: channelService},
+		terminalTracker: NewStreamTerminalTrackerForRequest(nil),
+		transformer:     &mockTransformer{},
+	}
+
+	require.True(t, ts.Next())
+	ts.Current()
+	require.True(t, perf.RequestCompleted, "terminal event must complete the attempt")
+	require.NoError(t, ts.Close())
+
+	require.Eventually(t, func() bool {
+		metrics, err := channelService.GetChannelModelMetrics(ctx, ch.ID, model)
+		return err == nil && metrics.ConsecutiveFailures == 0
+	}, 2*time.Second, 10*time.Millisecond,
+		"terminal-event finalization must publish the performance record")
+}
+
+// TestOutboundPersistentStream_ContentErrorPublishesFailure covers the reported
+// symptom: content error detection reclassifies a terminal-event stream as failed
+// after the terminal already marked it successful. Finalization must publish that
+// failed record, otherwise the channel model never accumulates consecutive
+// failures and keeps being selected.
+func TestOutboundPersistentStream_ContentErrorPublishesFailure(t *testing.T) {
+	ctx, client := setupTest(t)
+	channelService := newTestChannelServiceForChannels(client)
+	ch := createTestChannel(t, ctx, client)
+
+	const model = "gpt-4"
+
+	perf := &biz.PerformanceRecord{
+		ChannelID: ch.ID,
+		Model:     model,
+		StartTime: time.Now(),
+		Stream:    true,
+	}
+	ts := &OutboundPersistentStream{
+		ctx:             ctx,
+		stream:          streams.SliceStream([]*httpclient.StreamEvent{{Data: []byte("[DONE]")}}),
+		perf:            perf,
+		state:           &PersistenceState{Perf: perf, ChannelService: channelService},
+		terminalTracker: NewStreamTerminalTrackerForRequest(nil),
+		transformer:     &mockTransformer{},
+		contentErrorMatcher: pipeline.NewContentErrorMatcher([]pipeline.ContentErrorPattern{
+			{Pattern: "rate limit exceeded"},
+		}),
+	}
+
+	require.True(t, ts.Next())
+	ts.Current()
+	require.True(t, perf.Success, "terminal event marks the attempt successful first")
+
+	// finalizeClose runs this before publishing: the aggregated body matched an
+	// error pattern, so the same attempt is reclassified as failed.
+	ts.detectStreamContentError(ctx, []byte(`{"choices":[{"message":{"role":"assistant","content":"rate limit exceeded"}}]}`))
+	require.False(t, perf.Success)
+	require.True(t, perf.RequestCompleted)
+
+	require.NoError(t, ts.Close())
+
+	require.Eventually(t, func() bool {
+		metrics, err := channelService.GetChannelModelMetrics(ctx, ch.ID, model)
+		return err == nil && metrics.ConsecutiveFailures == 1
+	}, 2*time.Second, 10*time.Millisecond,
+		"content-error failures must reach model health after finalization")
+}
+
+// TestPerformancePublish_CountsCollidingAttemptOnce guards the double-count path:
+// stream finalization and the pipeline error callback can both observe one
+// attempt (preReadLlmStream closes the stream and then reports the error), and
+// the attempt must still count as one consecutive failure.
+func TestPerformancePublish_CountsCollidingAttemptOnce(t *testing.T) {
+	ctx, client := setupTest(t)
+	channelService := newTestChannelServiceForChannels(client)
+	ch := createTestChannel(t, ctx, client)
+
+	const model = "gpt-4"
+
+	perf := &biz.PerformanceRecord{
+		ChannelID:  ch.ID,
+		Model:      model,
+		StartTime:  time.Now(),
+		Stream:     true,
+		AttemptSeq: 1,
+	}
+	perf.MarkFailedWithMessage(502, "content error")
+	state := &PersistenceState{Perf: perf, ChannelService: channelService, AttemptSeq: 1}
+
+	publishPerformance(ctx, state, perf)
+
+	middleware := &performanceRecording{outbound: &PersistentOutboundTransformer{state: state}}
+	middleware.OnOutboundRawError(ctx, &httpclient.Error{StatusCode: 502})
+
+	require.Eventually(t, func() bool {
+		metrics, err := channelService.GetChannelModelMetrics(ctx, ch.ID, model)
+		return err == nil && metrics.ConsecutiveFailures == 1
+	}, 2*time.Second, 10*time.Millisecond, "one attempt must count as one failure")
+}
+
+// TestPerformancePublish_KeepsSuccessThenFailureOverride keeps the non-streaming
+// content-error semantics: a success published before detection must not prevent
+// the same attempt from being reclassified and published as a failure.
+func TestPerformancePublish_KeepsSuccessThenFailureOverride(t *testing.T) {
+	ctx, client := setupTest(t)
+	channelService := newTestChannelServiceForChannels(client)
+	ch := createTestChannel(t, ctx, client)
+
+	const model = "gpt-4"
+
+	now := time.Now()
+	channelService.RecordPerformance(ctx, &biz.PerformanceRecord{
+		ChannelID:          ch.ID,
+		Model:              model,
+		StartTime:          now.Add(-time.Second),
+		EndTime:            now,
+		Success:            false,
+		RequestCompleted:   true,
+		ResponseStatusCode: 502,
+	})
+
+	perf := &biz.PerformanceRecord{
+		ChannelID:  ch.ID,
+		Model:      model,
+		StartTime:  now,
+		AttemptSeq: 3,
+	}
+	perf.MarkSuccess()
+	state := &PersistenceState{Perf: perf, ChannelService: channelService, AttemptSeq: 3}
+
+	publishPerformance(ctx, state, perf)
+	require.Eventually(t, func() bool {
+		metrics, err := channelService.GetChannelModelMetrics(ctx, ch.ID, model)
+		return err == nil && metrics.ConsecutiveFailures == 0
+	}, 2*time.Second, 10*time.Millisecond, "the published success must reset the seeded failure")
+
+	perf.MarkFailedWithMessage(502, "content error")
+	publishPerformance(ctx, state, perf)
+	require.Eventually(t, func() bool {
+		metrics, err := channelService.GetChannelModelMetrics(ctx, ch.ID, model)
+		return err == nil && metrics.ConsecutiveFailures == 1
+	}, 2*time.Second, 10*time.Millisecond, "the changed outcome must still be published")
 }
 
 type responseSliceStream struct {

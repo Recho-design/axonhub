@@ -244,7 +244,7 @@ func (ts *OutboundPersistentStream) finalizeClose() error {
 			log.String("terminal_state", string(ts.terminalState)))
 		ts.persistResponseChunks(ctx, ts.accountingSourceEnd(streamErr, ctxErr))
 
-		return ts.closeSource()
+		return ts.finishFinalization()
 	}
 
 	var responseBody []byte
@@ -276,7 +276,6 @@ func (ts *OutboundPersistentStream) finalizeClose() error {
 				ts.outcome.observeAggregatedCompletion(true)
 			}
 			ts.markPerformanceTerminal(streamTerminalCompleted, "")
-			enqueueCompletedPerformance(ts.ctx, ts.state)
 		}
 	} else {
 		ts.logFinalizationDecision(ctx, "no_outbound_chunks_to_aggregate", streamErr, ctxErr, false, nil)
@@ -285,7 +284,6 @@ func (ts *OutboundPersistentStream) finalizeClose() error {
 		aggregatedCompleted = true
 		ts.outcome.observeValidatedCompletion()
 		ts.markPerformanceTerminal(streamTerminalCompleted, "")
-		enqueueCompletedPerformance(ts.ctx, ts.state)
 	}
 	if ts.outcome.hasFinalEvidence() {
 		ts.terminalState = ts.outcome.finalState()
@@ -302,7 +300,7 @@ func (ts *OutboundPersistentStream) finalizeClose() error {
 
 		ts.persistExecutionFailure(persistCtx, decision.cause)
 
-		return ts.closeSource()
+		return ts.finishFinalization()
 	}
 
 	if decision.state != streamTerminalCompleted {
@@ -314,7 +312,7 @@ func (ts *OutboundPersistentStream) finalizeClose() error {
 		// buffered so operators can inspect the truncated generation.
 		ts.persistExecutionFailure(persistCtx, decision.cause)
 
-		return ts.closeSource()
+		return ts.finishFinalization()
 	}
 
 	// Stream completed successfully - perform final persistence
@@ -329,6 +327,22 @@ func (ts *OutboundPersistentStream) finalizeClose() error {
 		ts.persistAggregatedResponse(context.WithoutCancel(ctx), responseBody, meta, sourceEnd)
 	} else {
 		ts.persistResponseChunks(ctx, sourceEnd)
+	}
+
+	return ts.finishFinalization()
+}
+
+// finishFinalization publishes the attempt's channel health, then closes the
+// source. Every terminal path funnels through here so the metrics worker sees
+// the record only after content error detection has had its say: a stream that
+// delivered upstream error text as assistant content must be recorded as a
+// failure, not as the success marked by its terminal event. Publishing before
+// this point (for example from the terminal-event handler) lets the success
+// win, leaving the model-level consecutive failure count at zero and the load
+// balancer free to keep selecting the failing channel.
+func (ts *OutboundPersistentStream) finishFinalization() error {
+	if ts.state != nil {
+		publishPerformance(ts.ctx, ts.state, ts.state.Perf)
 	}
 
 	return ts.closeSource()

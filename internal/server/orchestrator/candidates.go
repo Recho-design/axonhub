@@ -780,7 +780,10 @@ func (s *LoadBalancedSelector) Select(ctx context.Context, req *llm.Request) ([]
 
 	stickyID, stickyOK := 0, false
 	if traceStickyMode == biz.TraceStickyPreferPreviousChannel {
-		stickyID, stickyOK = s.resolveStickyChannelID(ctx, req, candidates)
+		// Resolve stickiness before the quota gate so an unhealthy sticky channel
+		// never receives the sticky-only quota exemption. A rejected sticky
+		// channel simply falls back to the regular load-balancing sort below.
+		stickyID, stickyOK = s.resolveStickyChannelID(ctx, req, loadBalancer, candidates)
 	}
 
 	var quotaFallback []*ChannelModelsCandidate
@@ -836,10 +839,14 @@ func resolveLoadBalancer(loadBalancers map[string]*LoadBalancer, strategy string
 // resolveStickyChannelID selects the previous trace channel first, then the
 // previous thread channel. When candidates are supplied, it preserves the
 // old behavior of falling through to the thread when the trace channel is not
-// among the candidates.
+// among the candidates. A candidate whose first retryable model is unhealthy
+// is skipped: an unhealthy trace sticky channel falls back to a healthy thread
+// sticky channel, and when neither is healthy the caller uses the regular
+// load-balancing order.
 func (s *LoadBalancedSelector) resolveStickyChannelID(
 	ctx context.Context,
 	req *llm.Request,
+	loadBalancer *LoadBalancer,
 	candidateSets ...[]*ChannelModelsCandidate,
 ) (int, bool) {
 	if s.previousChannelProvider == nil {
@@ -859,12 +866,30 @@ func (s *LoadBalancedSelector) resolveStickyChannelID(
 		}
 		return false
 	}
+	// usableCandidate reports whether channelID can still be pinned: it must be
+	// among the candidates, and its top-priority candidate must be healthy.
+	// Without candidate data the legacy "previous channel exists" behavior wins.
+	usableCandidate := func(channelID int) bool {
+		if !hasCandidate(channelID) {
+			return false
+		}
+		if len(candidateSets) == 0 {
+			return true
+		}
+
+		stickyCandidate, _ := extractStickyCandidate(candidateSets[0], channelID)
+		if stickyCandidate == nil {
+			return false
+		}
+
+		return s.isStickyCandidateHealthy(ctx, loadBalancer, stickyCandidate)
+	}
 
 	if trace, ok := contexts.GetTrace(ctx); ok && trace != nil {
 		channelID, err := s.previousChannelProvider.GetPreviousChannelID(ctx, trace.ID)
 		if err != nil {
 			log.Warn(ctx, "failed to get previous trace channel", log.Int("trace_id", trace.ID), log.Cause(err))
-		} else if hasCandidate(channelID) {
+		} else if usableCandidate(channelID) {
 			return channelID, true
 		}
 	}
@@ -886,11 +911,63 @@ func (s *LoadBalancedSelector) resolveStickyChannelID(
 		return 0, false
 	}
 
-	if !hasCandidate(channelID) {
+	if !usableCandidate(channelID) {
 		return 0, false
 	}
 
 	return channelID, true
+}
+
+// isStickyCandidateHealthy reports whether a sticky candidate's first retryable
+// model is healthy. The candidate metrics snapshot already composes the first
+// model's health from the health-ordered retry list, so RoundRobinHealth's
+// unhealthy judgment is equivalent to "every retryable model has failed
+// repeatedly within the cooldown". Missing metrics providers, errors and nil
+// snapshots fail open so selectors without metrics keep their old behavior.
+func (s *LoadBalancedSelector) isStickyCandidateHealthy(
+	ctx context.Context,
+	loadBalancer *LoadBalancer,
+	candidate *ChannelModelsCandidate,
+) bool {
+	if candidate == nil || candidate.Channel == nil {
+		return false
+	}
+
+	if loadBalancer == nil || loadBalancer.metricsProvider == nil {
+		loadBalancer = s.stickyMetricsLoadBalancer()
+	}
+	if loadBalancer == nil || loadBalancer.metricsProvider == nil {
+		return true
+	}
+
+	metrics, err := loadBalancer.candidateMetrics(ctx, candidate)
+	if err != nil || metrics == nil {
+		return true
+	}
+
+	return !NewRoundRobinHealthStrategy().IsUnhealthy(metrics)
+}
+
+// stickyMetricsLoadBalancer finds any configured load balancer that can read
+// channel metrics. It is only used when the request-level load balancer has no
+// metrics provider, so a strategy that omits metrics still gets health-gated
+// stickiness whenever another strategy can supply the snapshot.
+func (s *LoadBalancedSelector) stickyMetricsLoadBalancer() *LoadBalancer {
+	if s.loadBalancers == nil {
+		return nil
+	}
+
+	if lb := s.loadBalancers[biz.LoadBalancerStrategyAdaptive]; lb != nil && lb.metricsProvider != nil {
+		return lb
+	}
+
+	for _, lb := range s.loadBalancers {
+		if lb != nil && lb.metricsProvider != nil {
+			return lb
+		}
+	}
+
+	return nil
 }
 
 func (s *LoadBalancedSelector) pinStickyCandidate(
