@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-contrib/sse"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 
@@ -94,149 +93,235 @@ func (handlers *ChatCompletionHandlers) ChatCompletionWithRequest(c *gin.Context
 	started := time.Now()
 	ctx := c.Request.Context()
 
+	genericReq, evaluator, ok := handlers.prepareChatRequest(c, genericReq)
+	if !ok {
+		return
+	}
+
+	control := handlers.startChatProcess(ctx, c, genericReq, evaluator)
+	defer control.stop()
+
+	result, err := handlers.ChatCompletionOrchestrator.Process(control.ctx, genericReq)
+	control.heartbeat.stop()
+
+	if err != nil {
+		handlers.handleChatProcessError(ctx, c, err, control.heartbeat)
+		return
+	}
+
+	if !control.heartbeat.started() {
+		writeForwardResponseHeaders(c, genericReq, result)
+	}
+
+	if result.ChatCompletion != nil {
+		handlers.respondChatCompletion(ctx, c, result.ChatCompletion, evaluator, control.heartbeat)
+		return
+	}
+
+	if result.ChatCompletionStream != nil {
+		handlers.respondChatStream(ctx, c, genericReq, result, evaluator, control, started)
+	}
+}
+
+// prepareChatRequest applies the Claude Code safeguards policy and returns the sanitized
+// request. ok is false when an error response was already written.
+func (handlers *ChatCompletionHandlers) prepareChatRequest(
+	c *gin.Context,
+	genericReq *httpclient.Request,
+) (*httpclient.Request, *safeguards.Evaluator, bool) {
+	ctx := c.Request.Context()
+
 	if genericReq == nil || len(genericReq.Body) == 0 {
 		JSONError(c, http.StatusBadRequest, errors.New("Request body is empty"))
-		return
+		return nil, nil, false
 	}
 
 	config := handlers.safeguardsConfig
 	// Only Claude Code requests asking for server-side safeguards need the settings lookup.
 	if handlers.safeguardsConfigProvider != nil && gjson.GetBytes(genericReq.Body, "safeguards.#(type==\"dangerous_tool_use\")").Exists() {
-		var err error
-		config, err = handlers.safeguardsConfigProvider(ctx)
+		settings, err := handlers.safeguardsConfigProvider(ctx)
 		if err != nil {
 			log.Error(ctx, "Unable to load Claude Code safeguards settings", log.Cause(err))
 			JSONError(c, http.StatusInternalServerError, errors.New("Unable to load Claude Code safeguards settings"))
-			return
+			return nil, nil, false
 		}
+		config = settings
 	}
+
 	evaluator, prepared, err := prepareSafeguardsRequest(genericReq, config, handlers.reviewer)
 	if err != nil {
 		JSONError(c, http.StatusBadRequest, err)
-		return
-	}
-	genericReq = prepared
-
-	processCtx := ctx
-	var abortUpstream context.CancelFunc
-	if evaluator != nil {
-		processCtx, abortUpstream = context.WithCancel(ctx)
-		defer abortUpstream()
+		return nil, nil, false
 	}
 
-	// Keep-alive settings are read at most once per request and feed both heartbeat paths:
-	// the non-streaming one while Process blocks, the SSE one while a stream idles.
+	return prepared, evaluator, true
+}
+
+// chatProcessControl carries everything the Process call and its response writers need.
+type chatProcessControl struct {
+	ctx           context.Context
+	cancelProcess context.CancelFunc
+	abortUpstream context.CancelFunc
+	heartbeat     *requestKeepAlive
+	sseKeepAlive  SSEKeepAliveConfig
+}
+
+// stop stops the heartbeat before releasing the process context so the goroutine never
+// touches the response writer after the handler resumes.
+func (control chatProcessControl) stop() {
+	control.heartbeat.stop()
+	if control.cancelProcess != nil {
+		control.cancelProcess()
+	}
+}
+
+// startChatProcess picks the pre-process heartbeat and installs a cancelable context
+// whenever a heartbeat can emit bytes or safeguards can abort the upstream.
+func (handlers *ChatCompletionHandlers) startChatProcess(
+	ctx context.Context,
+	c *gin.Context,
+	genericReq *httpclient.Request,
+	evaluator *safeguards.Evaluator,
+) chatProcessControl {
 	nonStreamKeepAlive, sseKeepAlive := handlers.resolveKeepAlive(ctx)
+	mode := handlers.classifyPreProcessKeepAlive(genericReq)
 
-	// Non-streaming requests stay silent on the wire while Process blocks, so an
-	// intermediary with an idle timeout (Cloudflare: 100s) may drop the connection.
-	// Streaming responses carry their own SSE heartbeat and are left untouched.
-	heartbeatCfg := NonStreamKeepAliveConfig{}
-	if isNonStreamingRequest(genericReq) {
-		heartbeatCfg = nonStreamKeepAlive
+	control := chatProcessControl{ctx: ctx, sseKeepAlive: sseKeepAlive}
+	if evaluator != nil || keepAliveWillTick(mode, nonStreamKeepAlive, sseKeepAlive, handlers.sseHeartbeatFormat) {
+		control.ctx, control.cancelProcess = context.WithCancel(ctx)
 	}
-	heartbeat := startNonStreamKeepAlive(c, heartbeatCfg)
-	// Guards against a panic in Process leaving the heartbeat goroutine writing into a
-	// response that gin's recovery middleware is about to overwrite.
-	defer heartbeat.stop()
+	if evaluator != nil {
+		control.abortUpstream = control.cancelProcess
+	}
+	control.heartbeat = startPreProcessKeepAlive(
+		c, mode, nonStreamKeepAlive, sseKeepAlive, handlers.sseHeartbeatFormat, control.cancelProcess)
 
-	result, err := handlers.ChatCompletionOrchestrator.Process(processCtx, genericReq)
-	heartbeat.stop()
+	return control
+}
 
-	if err != nil {
-		log.Error(ctx, "Error processing chat completion", log.Cause(err))
+func (handlers *ChatCompletionHandlers) handleChatProcessError(
+	ctx context.Context,
+	c *gin.Context,
+	err error,
+	heartbeat *requestKeepAlive,
+) {
+	log.Error(ctx, "Error processing chat completion", log.Cause(err))
 
-		httpErr := transformOrchestratorError(ctx, err, handlers.ChatCompletionOrchestrator)
-		if heartbeat.started() {
-			// The heartbeat already committed a 200 with a JSON content type, so the
-			// status cannot change anymore; deliver the error body inside it.
-			log.Warn(ctx, "Non-stream keep-alive committed the response before the upstream error, returning the error body with status 200",
-				log.Int("upstream_status_code", httpErr.StatusCode))
-			if writeErr := writeCommittedBody(c.Writer, httpErr.Body); writeErr != nil {
-				log.Warn(ctx, "Failed to write error body after non-stream keep-alive heartbeat", log.Cause(writeErr))
-			}
-
-			return
+	httpErr := transformOrchestratorError(ctx, err, handlers.ChatCompletionOrchestrator)
+	switch {
+	case heartbeat.sseStarted():
+		// The pre-stream heartbeat already committed 200 text/event-stream, so the
+		// failure can only travel as an SSE error event.
+		handlers.writePreStreamSSEError(ctx, c, err, httpErr)
+	case heartbeat.started():
+		// The heartbeat already committed a 200 with a JSON content type, so the
+		// status cannot change anymore; deliver the error body inside it.
+		log.Warn(ctx, "Non-stream keep-alive committed the response before the upstream error, returning the error body with status 200",
+			log.Int("upstream_status_code", httpErr.StatusCode))
+		if writeErr := writeCommittedBody(c.Writer, httpErr.Body); writeErr != nil {
+			log.Warn(ctx, "Failed to write error body after non-stream keep-alive heartbeat", log.Cause(writeErr))
 		}
-
+	default:
 		c.JSON(httpErr.StatusCode, json.RawMessage(httpErr.Body))
+	}
+}
 
+func (handlers *ChatCompletionHandlers) respondChatCompletion(
+	ctx context.Context,
+	c *gin.Context,
+	resp *httpclient.Response,
+	evaluator *safeguards.Evaluator,
+	heartbeat *requestKeepAlive,
+) {
+	committed := heartbeat.started()
+	if heartbeat.sseStarted() {
+		log.Warn(ctx, "Pre-stream SSE keep-alive committed the response but the orchestrator returned a non-stream body")
+	}
+
+	contentType := "application/json"
+	if !committed {
+		copyCodexTurnStateHeader(c.Writer.Header(), resp.Headers)
+
+		if ct := resp.Headers.Get("Content-Type"); ct != "" {
+			contentType = ct
+		}
+	}
+
+	body, err := evaluator.AnnotateResponse(ctx, resp.Body)
+	if err != nil {
+		JSONError(c, http.StatusBadGateway, err)
 		return
 	}
 
-	if !heartbeat.started() {
-		writeForwardResponseHeaders(c, genericReq, result)
-	}
-
-	if result.ChatCompletion != nil {
-		resp := result.ChatCompletion
-		committed := heartbeat.started()
-
-		contentType := "application/json"
-		if !committed {
-			copyCodexTurnStateHeader(c.Writer.Header(), resp.Headers)
-
-			if ct := resp.Headers.Get("Content-Type"); ct != "" {
-				contentType = ct
-			}
-		}
-
-		body, err := evaluator.AnnotateResponse(ctx, resp.Body)
-		if err != nil {
-			JSONError(c, http.StatusBadGateway, err)
-			return
-		}
-
-		if committed {
-			// Headers and the status line were committed by the heartbeat, so the
-			// upstream status and headers can no longer be forwarded downstream.
-			if resp.StatusCode != http.StatusOK {
-				log.Debug(ctx, "Non-stream keep-alive committed status 200 for a non-200 upstream response",
-					log.Int("upstream_status_code", resp.StatusCode))
-			}
-			if writeErr := writeCommittedBody(c.Writer, body); writeErr != nil {
-				log.Warn(ctx, "Failed to write response body after non-stream keep-alive heartbeat", log.Cause(writeErr))
-			}
-
-			return
-		}
-
-		c.Data(resp.StatusCode, contentType, body)
-
+	if committed {
+		writeCommittedChatCompletion(ctx, c, resp, body)
 		return
 	}
 
-	if result.ChatCompletionStream != nil {
-		if heartbeat.started() {
-			log.Warn(ctx, "Non-stream keep-alive committed the response but the orchestrator returned a stream")
-		}
+	c.Data(resp.StatusCode, contentType, body)
+}
 
-		defer func() {
-			log.Debug(ctx, "Close chat stream")
+// writeCommittedChatCompletion writes the body of a response whose status line was
+// already committed by the heartbeat, so the upstream status can no longer be forwarded.
+func writeCommittedChatCompletion(ctx context.Context, c *gin.Context, resp *httpclient.Response, body []byte) {
+	if resp.StatusCode != http.StatusOK {
+		log.Debug(ctx, "Non-stream keep-alive committed status 200 for a non-200 upstream response",
+			log.Int("upstream_status_code", resp.StatusCode))
+	}
+	if writeErr := writeCommittedBody(c.Writer, body); writeErr != nil {
+		log.Warn(ctx, "Failed to write response body after non-stream keep-alive heartbeat", log.Cause(writeErr))
+	}
+}
 
-			err := result.ChatCompletionStream.Close()
-			if waiter, ok := result.ChatCompletionStream.(streams.FinalizationWaiter); ok {
-				waiter.WaitForFinalization()
-			}
-			if err != nil {
-				logger.Error(ctx, "Error closing stream", log.Cause(err))
-			}
-		}()
+func (handlers *ChatCompletionHandlers) respondChatStream(
+	ctx context.Context,
+	c *gin.Context,
+	genericReq *httpclient.Request,
+	result orchestrator.ChatCompletionResult,
+	evaluator *safeguards.Evaluator,
+	control chatProcessControl,
+	started time.Time,
+) {
+	heartbeat := control.heartbeat
+	committed := heartbeat.started()
+	if committed && !heartbeat.sseStarted() {
+		log.Warn(ctx, "Non-stream keep-alive committed the response but the orchestrator returned a stream")
+	}
 
+	defer closeChatStream(ctx, result.ChatCompletionStream)
+
+	if !committed {
+		// The pre-stream heartbeat already sent this header with the SSE headers;
+		// adding it now would be a no-op after the response is committed.
 		c.Header("Access-Control-Allow-Origin", "*")
+	}
 
-		source := wrapAnthropicInputUsage(result.ChatCompletionStream, genericReq, newInputUsageCalibration(ctx, handlers.inputUsageCache, result.Route, started))
-		source = wrapSafeguardsStream(ctx, source, evaluator, abortUpstream)
-		stream := newUpstreamErrorStream(ctx, source, handlers.ChatCompletionOrchestrator.SystemService)
-		if strings.HasSuffix(genericReq.Path, "/responses") {
-			stream = primeCodexTurnStateHeader(c.Writer.Header(), stream)
-		}
-		if handlers.StreamWriter != nil {
-			handlers.StreamWriter(c, stream)
-			return
-		}
+	source := wrapAnthropicInputUsage(result.ChatCompletionStream, genericReq,
+		newInputUsageCalibration(ctx, handlers.inputUsageCache, result.Route, started))
+	source = wrapSafeguardsStream(ctx, source, evaluator, control.abortUpstream)
+	stream := newUpstreamErrorStream(ctx, source, handlers.ChatCompletionOrchestrator.SystemService)
+	if !committed && strings.HasSuffix(genericReq.Path, "/responses") {
+		// Header priming reads the first event; after the response is committed the
+		// turn-state header can no longer be sent, so skip the extra read.
+		stream = primeCodexTurnStateHeader(c.Writer.Header(), stream)
+	}
+	if handlers.StreamWriter != nil {
+		handlers.StreamWriter(c, stream)
+		return
+	}
 
-		handlers.writeSSEStream(c, stream, sseKeepAlive)
+	handlers.writeSSEStream(c, stream, control.sseKeepAlive)
+}
+
+func closeChatStream(ctx context.Context, stream streams.Stream[*httpclient.StreamEvent]) {
+	log.Debug(ctx, "Close chat stream")
+
+	err := stream.Close()
+	if waiter, ok := stream.(streams.FinalizationWaiter); ok {
+		waiter.WaitForFinalization()
+	}
+	if err != nil {
+		logger.Error(ctx, "Error closing stream", log.Cause(err))
 	}
 }
 
@@ -608,174 +693,6 @@ func writeSSEStreamEnd(
 			*clientDisconnected = true
 			log.Warn(ctx, "Failed to write incomplete SSE stream error", log.Cause(err))
 		}
-	}
-}
-
-func writeSSEErrorEvent(ctx context.Context, writer http.ResponseWriter, encodeErr StreamErrorEncoder, err error) error {
-	event, encodeError := encodeErr(ctx, orchestrator.ClassifyUpstreamTransportError(err))
-	if encodeError != nil {
-		return encodeError
-	}
-	return writeSSEEvent(ctx, writer, event.Type, event.Data)
-}
-
-func writeSSEEvent(ctx context.Context, writer http.ResponseWriter, event string, data any) error {
-	return writeAndFlushSSE(ctx, writer, func(writer io.Writer) error {
-		return sse.Encode(writer, sse.Event{Event: event, Data: data})
-	})
-}
-
-type sseErrorWriter struct {
-	writer io.Writer
-	err    error
-}
-
-func (w *sseErrorWriter) Write(data []byte) (int, error) {
-	if w.err != nil {
-		return 0, w.err
-	}
-
-	n, err := w.writer.Write(data)
-	if err == nil && n != len(data) {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		w.err = err
-	}
-
-	return n, err
-}
-
-func (w *sseErrorWriter) WriteString(data string) (int, error) {
-	if w.err != nil {
-		return 0, w.err
-	}
-
-	n, err := io.WriteString(w.writer, data)
-	if err == nil && n != len(data) {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		w.err = err
-	}
-
-	return n, err
-}
-
-func writeSSEHeartbeatEvent(ctx context.Context, writer http.ResponseWriter, format sseHeartbeatFormat) error {
-	return writeAndFlushSSE(ctx, writer, func(writer io.Writer) error {
-		return writeSSEHeartbeat(writer, format)
-	})
-}
-
-func flushSSE(ctx context.Context, writer http.ResponseWriter) error {
-	return writeAndFlushSSE(ctx, writer, nil)
-}
-
-func writeAndFlushSSE(ctx context.Context, writer http.ResponseWriter, write func(io.Writer) error) error {
-	refreshSSEWriteDeadline(ctx, writer)
-	defer clearSSEWriteDeadline(ctx, writer)
-
-	if write != nil {
-		errorWriter := &sseErrorWriter{writer: writer}
-		if err := write(errorWriter); err != nil {
-			return err
-		}
-		if errorWriter.err != nil {
-			return errorWriter.err
-		}
-	}
-
-	return flushResponseWriter(writer)
-}
-
-type responseWriterFlushError interface {
-	FlushError() error
-}
-
-type responseWriterUnwrapper interface {
-	Unwrap() http.ResponseWriter
-}
-
-func flushResponseWriter(writer http.ResponseWriter) error {
-	if headerWriter, ok := writer.(interface{ WriteHeaderNow() }); ok {
-		headerWriter.WriteHeaderNow()
-	}
-	if flusher, ok := writer.(responseWriterFlushError); ok {
-		return flusher.FlushError()
-	}
-	if unwrapper, ok := writer.(responseWriterUnwrapper); ok {
-		return flushResponseWriter(unwrapper.Unwrap())
-	}
-	if flusher, ok := writer.(http.Flusher); ok {
-		flusher.Flush()
-
-		return nil
-	}
-
-	return http.ErrNotSupported
-}
-
-func refreshSSEWriteDeadline(ctx context.Context, writer http.ResponseWriter) {
-	setSSEWriteDeadline(ctx, writer, time.Now().Add(sseWriteTimeout))
-}
-
-func clearSSEWriteDeadline(ctx context.Context, writer http.ResponseWriter) {
-	setSSEWriteDeadline(ctx, writer, time.Time{})
-}
-
-func setSSEWriteDeadline(ctx context.Context, writer http.ResponseWriter, deadline time.Time) {
-	err := http.NewResponseController(writer).SetWriteDeadline(deadline)
-	if err != nil && !errors.Is(err, http.ErrNotSupported) {
-		log.Warn(ctx, "Failed to set SSE write deadline", log.Cause(err))
-	}
-}
-
-func stopTimer(timer *time.Timer) {
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
-}
-
-func resetTimer(timer *time.Timer, interval time.Duration) {
-	stopTimer(timer)
-	timer.Reset(interval)
-}
-
-func setSSEHeaders(c *gin.Context) {
-	setSSEResponseHeaders(c.Writer.Header())
-}
-
-func setSSEResponseHeaders(header http.Header) {
-	header.Set("Content-Type", sse.ContentType)
-	header.Set("Cache-Control", "no-cache")
-	header.Set("Connection", "keep-alive")
-}
-
-func writeSSEHeartbeat(writer io.Writer, format sseHeartbeatFormat) error {
-	switch format {
-	case sseHeartbeatOpenAI:
-		_, err := io.WriteString(writer, ": keep-alive\n\n")
-		return err
-	case sseHeartbeatAnthropic:
-		_, err := io.WriteString(writer, "event: ping\ndata: {\"type\":\"ping\"}\n\n")
-		return err
-	default:
-		return errors.New("unsupported SSE heartbeat format")
-	}
-}
-
-func sseHeartbeatFormatName(format sseHeartbeatFormat) string {
-	switch format {
-	case sseHeartbeatOpenAI:
-		return "openai"
-	case sseHeartbeatAnthropic:
-		return "anthropic"
-	default:
-		return "unknown"
 	}
 }
 

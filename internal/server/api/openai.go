@@ -367,6 +367,11 @@ func NewOpenAIHandlers(params OpenAIHandlersParams) *OpenAIHandlers {
 		handler.sseHeartbeatFormat = sseHeartbeatOpenAI
 	}
 
+	// Compact always answers with one JSON ChatCompletion, even when the client sends
+	// "stream": true, so it must never inherit the SSE heartbeat settings.
+	handlers.CompactHandlers.sseKeepAlive = SSEKeepAliveConfig{}
+	handlers.CompactHandlers.sseHeartbeatFormat = sseHeartbeatNone
+
 	return handlers
 }
 

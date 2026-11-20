@@ -1,3 +1,19 @@
+// 职责: 提供 Google Gemini 原生端点（generateContent / streamGenerateContent / models）。
+// 关联文件:
+//
+//	internal/server/api/chat.go
+//	internal/server/api/prestream_keepalive.go
+//	internal/server/api/nonstream_keepalive.go
+//	internal/server/api/anthropic.go
+//
+// 遵循的 Rules:
+//
+//	.agents/rules/go-general.md
+//
+// 注意事项:
+//
+//	alt=sse 必须走默认 SSE 写入器（StreamWriter == nil），此时首包前与流中空闲心跳
+//	都是 SSE 注释帧；默认 JSON 数组流由 WriteGeminiStream 负责，绝不能注入任何字节。
 package api
 
 import (
@@ -36,6 +52,8 @@ type GeminiHandlersParams struct {
 	ChannelLimiterManager       *orchestrator.ChannelLimiterManager
 	ProviderQuotaStatusProvider orchestrator.ProviderQuotaStatusProvider
 	PluginManager               *plugin.Manager
+	SSEKeepAliveConfig          SSEKeepAliveConfig
+	NonStreamKeepAliveConfig    NonStreamKeepAliveConfig
 }
 
 type GeminiHandlers struct {
@@ -45,34 +63,45 @@ type GeminiHandlers struct {
 }
 
 func NewGeminiHandlers(params GeminiHandlersParams) *GeminiHandlers {
+	chatHandlers := NewChatCompletionHandlers(
+		orchestrator.NewChatCompletionOrchestrator(
+			params.ChannelService,
+			params.DefaultSelector,
+			params.RequestService,
+			params.HttpClient,
+			gemini.NewInboundTransformer(),
+			params.SystemService,
+			params.UsageLogService,
+			params.PromptService,
+			params.QuotaService,
+			params.PromptProtectionRuleService,
+			params.LiveStreamRegistry,
+			params.ChannelLimiterManager,
+			params.ProviderQuotaStatusProvider,
+			orchestratorPlugins(params.PluginManager)),
+	)
+	// alt=sse 走默认 SSE 写入器，因此心跳格式必须是标准 SSE 注释帧；
+	// 默认 JSON 数组流由 WriteGeminiStream 覆盖 StreamWriter，心跳自然不生效。
+	chatHandlers.sseKeepAlive = params.SSEKeepAliveConfig
+	chatHandlers.nonStreamKeepAlive = params.NonStreamKeepAliveConfig
+	chatHandlers.keepAliveConfigProvider = keepAliveProviderFromSystemService(params.SystemService)
+	chatHandlers.sseHeartbeatFormat = sseHeartbeatOpenAI
+
 	return &GeminiHandlers{
-		ChatCompletionHandlers: NewChatCompletionHandlers(
-			orchestrator.NewChatCompletionOrchestrator(
-				params.ChannelService,
-				params.DefaultSelector,
-				params.RequestService,
-				params.HttpClient,
-				gemini.NewInboundTransformer(),
-				params.SystemService,
-				params.UsageLogService,
-				params.PromptService,
-				params.QuotaService,
-				params.PromptProtectionRuleService,
-				params.LiveStreamRegistry,
-				params.ChannelLimiterManager,
-				params.ProviderQuotaStatusProvider,
-				orchestratorPlugins(params.PluginManager)),
-		),
-		ChannelService: params.ChannelService,
-		ModelService:   params.ModelService,
+		ChatCompletionHandlers: chatHandlers,
+		ChannelService:         params.ChannelService,
+		ModelService:           params.ModelService,
 	}
 }
 
+// GenerateContent dispatches Gemini model actions. alt=sse keeps the default SSE
+// writer so pre-stream and idle SSE heartbeats apply; every other action uses the
+// Gemini JSON array / single JSON writer.
 func (handlers *GeminiHandlers) GenerateContent(c *gin.Context) {
 	alt := c.Query("alt")
 	switch alt {
 	case "sse":
-		handlers.ChatCompletionHandlers.WithStreamWriter(WriteSSEStream).ChatCompletion(c)
+		handlers.ChatCompletionHandlers.WithStreamWriter(nil).ChatCompletion(c)
 	default:
 		handlers.ChatCompletionHandlers.WithStreamWriter(WriteGeminiStream).ChatCompletion(c)
 	}

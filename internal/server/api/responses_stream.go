@@ -33,50 +33,50 @@ func newResponsesStreamAdapter(ctx context.Context, stream streams.Stream[*httpc
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			err = applyUpstreamErrorPolicy(ctx, pipeline.WrapUpstreamError(orchestrator.ClassifyUpstreamTransportError(err)), systemService)
 		}
-		code := "stream_error"
-		message := orchestrator.ExtractErrorMessage(err)
-		requestID := ""
-		var responseErr *llm.ResponseError
-		var httpErr *httpclient.Error
-		switch {
-		case errors.As(err, &responseErr):
-			code = firstNonEmpty(responseErr.Detail.Code, code)
-			message = responseErr.Detail.Message
-			requestID = responseErr.Detail.RequestID
-		case errors.As(err, &httpErr):
-			code = firstNonEmpty(upstreamErrorCodeFromHTTP(httpErr), code)
-			requestID = upstreamRequestIDFromHTTP(httpErr)
-		}
-		data, marshalErr := json.Marshal(struct {
-			responses.StreamEvent
-
-			Param     *string `json:"param"`
-			RequestID string  `json:"request_id,omitempty"`
-		}{StreamEvent: responses.StreamEvent{
-			Type: responses.StreamEventTypeError, SequenceNumber: int(nextSequence.Load()), Code: code, Message: message,
-		}, RequestID: streamErrorRequestID(ctx, requestID)})
-		if marshalErr != nil {
-			return nil, marshalErr
-		}
-		return &httpclient.StreamEvent{Type: "error", Data: data}, nil
+		return encodeResponsesStreamError(ctx, err, int(nextSequence.Load()))
 	}
 	return preserveStreamDelivery(stream, source), encodeErr
+}
+
+// encodeResponsesStreamError builds a Responses protocol error event for an error whose
+// policy decision is already final. Callers that must not redact a gateway-local error
+// (for example a failure before the upstream stream opened) pass the raw error here
+// instead of the adapter's encoder, which always marks errors as upstream.
+func encodeResponsesStreamError(ctx context.Context, err error, sequence int) (*httpclient.StreamEvent, error) {
+	code := "stream_error"
+	message := orchestrator.ExtractErrorMessage(err)
+	requestID := ""
+	var responseErr *llm.ResponseError
+	var httpErr *httpclient.Error
+	switch {
+	case errors.As(err, &responseErr):
+		code = firstNonEmpty(responseErr.Detail.Code, code)
+		message = responseErr.Detail.Message
+		requestID = responseErr.Detail.RequestID
+	case errors.As(err, &httpErr):
+		code = firstNonEmpty(upstreamErrorCodeFromHTTP(httpErr), code)
+		requestID = upstreamRequestIDFromHTTP(httpErr)
+	}
+	data, marshalErr := json.Marshal(struct {
+		responses.StreamEvent
+
+		Param     *string `json:"param"`
+		RequestID string  `json:"request_id,omitempty"`
+	}{StreamEvent: responses.StreamEvent{
+		Type: responses.StreamEventTypeError, SequenceNumber: sequence, Code: code, Message: message,
+	}, RequestID: streamErrorRequestID(ctx, requestID)})
+	if marshalErr != nil {
+		return nil, marshalErr
+	}
+	return &httpclient.StreamEvent{Type: "error", Data: data}, nil
 }
 
 func applyResponsesEventErrorPolicy(ctx context.Context, event *httpclient.StreamEvent, systemService *biz.SystemService) (*httpclient.StreamEvent, error) {
 	if systemService == nil {
 		return event, nil
 	}
-	messagePath := ""
-	switch firstNonEmpty(event.Type, gjson.GetBytes(event.Data, "type").String()) {
-	case "response.failed":
-		messagePath = "response.error.message"
-	case "error":
-		messagePath = "message"
-		if gjson.GetBytes(event.Data, "error.message").Exists() {
-			messagePath = "error.message"
-		}
-	default:
+	messagePath := responsesEventMessagePath(event)
+	if messagePath == "" {
 		return event, nil
 	}
 	policy := systemService.RetryPolicyOrDefault(ctx).UpstreamErrorPolicy
@@ -100,4 +100,21 @@ func applyResponsesEventErrorPolicy(ctx context.Context, event *httpclient.Strea
 	copyEvent := *event
 	copyEvent.Data = data
 	return &copyEvent, nil
+}
+
+// responsesEventMessagePath returns the JSON path of the policy-controlled message on an
+// error event, or "" for every other event type.
+func responsesEventMessagePath(event *httpclient.StreamEvent) string {
+	switch firstNonEmpty(event.Type, gjson.GetBytes(event.Data, "type").String()) {
+	case "response.failed":
+		return "response.error.message"
+	case "error":
+		if gjson.GetBytes(event.Data, "error.message").Exists() {
+			return "error.message"
+		}
+
+		return "message"
+	default:
+		return ""
+	}
 }
