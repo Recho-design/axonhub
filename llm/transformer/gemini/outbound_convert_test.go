@@ -12,6 +12,7 @@ import (
 
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/internal/pkg/xmap"
+	"github.com/looplj/axonhub/llm/transformer"
 	"github.com/looplj/axonhub/llm/transformer/shared"
 )
 
@@ -2949,7 +2950,8 @@ func TestConvertLLMRoleToGeminiRole(t *testing.T) {
 	}{
 		{"assistant", "model"},
 		{"user", "user"},
-		{"system", "system"},
+		{"system", "user"},
+		{"developer", "user"},
 		{"unknown", "unknown"},
 	}
 
@@ -3983,4 +3985,208 @@ func TestConvertGeminiToLLMResponse_GroundingMetadata_Additional(t *testing.T) {
 			tt.validate(t, result)
 		})
 	}
+}
+
+// =============================================================================
+// Mid-conversation system/developer handling
+// =============================================================================
+
+// TestConvertLLMToGeminiRequest_MidConversationSystemAndDeveloperStayInContents
+// simulates SillyTavern world info / summary / depth-prompt (@D) injections: only
+// the leading system/developer messages may become systemInstruction, while any
+// injected after the first user turn must stay in contents as "user" turns.
+func TestConvertLLMToGeminiRequest_MidConversationSystemAndDeveloperStayInContents(t *testing.T) {
+	result := convertLLMToGeminiRequest(&llm.Request{
+		Model: "gemini-2.5-flash",
+		Messages: []llm.Message{
+			{Role: "system", Content: llm.MessageContent{Content: lo.ToPtr("leading system")}},
+			{Role: "developer", Content: llm.MessageContent{Content: lo.ToPtr("leading developer")}},
+			{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("hello")}},
+			{Role: "assistant", Content: llm.MessageContent{Content: lo.ToPtr("hi")}},
+			{Role: "system", Content: llm.MessageContent{Content: lo.ToPtr("world info")}},
+			{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("question")}},
+			{Role: "developer", Content: llm.MessageContent{Content: lo.ToPtr("summary")}},
+			{Role: "assistant", Content: llm.MessageContent{Content: lo.ToPtr("answer")}},
+			{Role: "system", Content: llm.MessageContent{Content: lo.ToPtr("deep prompt")}},
+		},
+	})
+
+	require.NotNil(t, result.SystemInstruction)
+	require.Len(t, result.SystemInstruction.Parts, 2)
+	require.Equal(t, "leading system", result.SystemInstruction.Parts[0].Text)
+	require.Equal(t, "leading developer", result.SystemInstruction.Parts[1].Text)
+
+	// Adjacent user turns stay separate: no forced merging, no extra prefixes.
+	expected := []struct {
+		role string
+		text string
+	}{
+		{"user", "hello"},
+		{"model", "hi"},
+		{"user", "world info"},
+		{"user", "question"},
+		{"user", "summary"},
+		{"model", "answer"},
+		{"user", "deep prompt"},
+	}
+
+	require.Len(t, result.Contents, len(expected))
+	for i, exp := range expected {
+		require.Equal(t, exp.role, result.Contents[i].Role, "content %d role", i)
+		require.Len(t, result.Contents[i].Parts, 1, "content %d parts", i)
+		require.Equal(t, exp.text, result.Contents[i].Parts[0].Text, "content %d text", i)
+	}
+}
+
+// TestConvertLLMToGeminiRequest_EmptyFirstUserStartsConversation verifies that an
+// empty first user turn (which converts to nil) still marks the conversation as
+// started, so a following system message is not promoted into systemInstruction.
+func TestConvertLLMToGeminiRequest_EmptyFirstUserStartsConversation(t *testing.T) {
+	result := convertLLMToGeminiRequest(&llm.Request{
+		Model: "gemini-2.5-flash",
+		Messages: []llm.Message{
+			{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("")}},
+			{Role: "system", Content: llm.MessageContent{Content: lo.ToPtr("mid system")}},
+			{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("Hello")}},
+		},
+	})
+
+	require.Nil(t, result.SystemInstruction)
+	require.Len(t, result.Contents, 2)
+	require.Equal(t, "user", result.Contents[0].Role)
+	require.Len(t, result.Contents[0].Parts, 1)
+	require.Equal(t, "mid system", result.Contents[0].Parts[0].Text)
+	require.Equal(t, "user", result.Contents[1].Role)
+	require.Len(t, result.Contents[1].Parts, 1)
+	require.Equal(t, "Hello", result.Contents[1].Parts[0].Text)
+}
+
+// TestConvertLLMToGeminiRequest_MidConversationEmptyTextPartsFiltered verifies
+// that empty text parts in mid-conversation system/user turns are dropped, so no
+// empty `{}` Part is serialized for Gemini.
+func TestConvertLLMToGeminiRequest_MidConversationEmptyTextPartsFiltered(t *testing.T) {
+	result := convertLLMToGeminiRequest(&llm.Request{
+		Model: "gemini-2.5-flash",
+		Messages: []llm.Message{
+			{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("hello")}},
+			{Role: "system", Content: llm.MessageContent{MultipleContent: []llm.MessageContentPart{
+				{Type: "text", Text: lo.ToPtr("")},
+				{Type: "text", Text: lo.ToPtr("mid system")},
+				{Type: "text", Text: lo.ToPtr("")},
+			}}},
+			{Role: "user", Content: llm.MessageContent{MultipleContent: []llm.MessageContentPart{
+				{Type: "text", Text: lo.ToPtr("")},
+				{Type: "text", Text: lo.ToPtr("question")},
+			}}},
+		},
+	})
+
+	require.Nil(t, result.SystemInstruction)
+	require.Len(t, result.Contents, 3)
+
+	require.Len(t, result.Contents[0].Parts, 1)
+	require.Equal(t, "hello", result.Contents[0].Parts[0].Text)
+
+	require.Len(t, result.Contents[1].Parts, 1)
+	require.Equal(t, "mid system", result.Contents[1].Parts[0].Text)
+
+	require.Len(t, result.Contents[2].Parts, 1)
+	require.Equal(t, "question", result.Contents[2].Parts[0].Text)
+}
+
+// TestConvertLLMToGeminiRequest_SystemBetweenToolResponses verifies that a
+// system/developer message wedged between function calls and their function
+// responses neither splits nor drops the tool responses. The tool results stay
+// grouped right after the model turn; the injected texts follow that group.
+func TestConvertLLMToGeminiRequest_SystemBetweenToolResponses(t *testing.T) {
+	result := convertLLMToGeminiRequest(&llm.Request{
+		Model: "gemini-2.5-flash",
+		Messages: []llm.Message{
+			{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("weather and news?")}},
+			{
+				Role: "assistant",
+				ToolCalls: []llm.ToolCall{
+					{
+						ID:   "call_weather",
+						Type: "function",
+						Function: llm.FunctionCall{
+							Name:      "get_weather",
+							Arguments: `{"city": "Paris"}`,
+						},
+					},
+					{
+						ID:   "call_news",
+						Type: "function",
+						Function: llm.FunctionCall{
+							Name:      "get_news",
+							Arguments: `{"category": "tech"}`,
+						},
+					},
+				},
+			},
+			{Role: "system", Content: llm.MessageContent{Content: lo.ToPtr("mid-1")}},
+			{
+				Role:         "tool",
+				Content:      llm.MessageContent{Content: lo.ToPtr(`{"temperature": 22}`)},
+				ToolCallID:   lo.ToPtr("call_weather"),
+				ToolCallName: lo.ToPtr("get_weather"),
+			},
+			{Role: "developer", Content: llm.MessageContent{Content: lo.ToPtr("mid-2")}},
+			{
+				Role:         "tool",
+				Content:      llm.MessageContent{Content: lo.ToPtr(`{"headlines": ["AI"]}`)},
+				ToolCallID:   lo.ToPtr("call_news"),
+				ToolCallName: lo.ToPtr("get_news"),
+			},
+			{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("thanks")}},
+		},
+	})
+
+	require.Nil(t, result.SystemInstruction)
+	require.Len(t, result.Contents, 6)
+
+	// The model turn keeps both function calls.
+	require.Equal(t, "model", result.Contents[1].Role)
+	require.Len(t, result.Contents[1].Parts, 2)
+
+	// Both tool results are merged into one user turn directly after the model turn.
+	toolTurn := result.Contents[2]
+	require.Equal(t, "user", toolTurn.Role)
+	require.Len(t, toolTurn.Parts, 2)
+	require.NotNil(t, toolTurn.Parts[0].FunctionResponse)
+	require.NotNil(t, toolTurn.Parts[1].FunctionResponse)
+	require.Equal(t, "call_weather", toolTurn.Parts[0].FunctionResponse.ID)
+	require.Equal(t, "call_news", toolTurn.Parts[1].FunctionResponse.ID)
+
+	// Injected system/developer texts follow the tool responses as user turns.
+	require.Equal(t, "user", result.Contents[3].Role)
+	require.Len(t, result.Contents[3].Parts, 1)
+	require.Equal(t, "mid-1", result.Contents[3].Parts[0].Text)
+
+	require.Equal(t, "user", result.Contents[4].Role)
+	require.Len(t, result.Contents[4].Parts, 1)
+	require.Equal(t, "mid-2", result.Contents[4].Parts[0].Text)
+
+	require.Equal(t, "user", result.Contents[5].Role)
+	require.Len(t, result.Contents[5].Parts, 1)
+	require.Equal(t, "thanks", result.Contents[5].Parts[0].Text)
+}
+
+// TestOutboundTransformer_PureLeadingSystemReturnsInvalidRequest keeps the
+// existing AxonHub contract: leading-only system/developer messages become
+// systemInstruction, contents stays empty, and TransformRequest rejects it.
+func TestOutboundTransformer_PureLeadingSystemReturnsInvalidRequest(t *testing.T) {
+	outbound, err := NewOutboundTransformer("https://generativelanguage.googleapis.com", "test-key")
+	require.NoError(t, err)
+
+	result, err := outbound.TransformRequest(t.Context(), &llm.Request{
+		Model: "gemini-2.5-flash",
+		Messages: []llm.Message{
+			{Role: "system", Content: llm.MessageContent{Content: lo.ToPtr("instruction text")}},
+		},
+	})
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, transformer.ErrInvalidRequest)
+	require.Nil(t, result)
 }

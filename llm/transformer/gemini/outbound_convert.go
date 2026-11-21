@@ -191,47 +191,7 @@ func convertLLMToGeminiRequestWithConfig(chatReq *llm.Request, config *Config) *
 		req.GenerationConfig = gc
 	}
 
-	// Convert messages
-	var systemInstruction *Content
-
-	contents := make([]*Content, 0)
-
-	for _, msg := range chatReq.Messages {
-		switch msg.Role {
-		case "system", "developer":
-			// Collect system and developer messages into system instruction
-			parts := extractPartsFromLLMMessage(&msg)
-			if len(parts) > 0 {
-				if systemInstruction == nil {
-					systemInstruction = &Content{
-						Parts: parts,
-					}
-				} else {
-					// Append to existing system instruction
-					systemInstruction.Parts = append(systemInstruction.Parts, parts...)
-				}
-			}
-
-		case "tool":
-			// Tool response - need to find the corresponding function call
-			// Group consecutive tool messages into a single Content entry
-			toolContent := convertLLMToolResultToGeminiContent(&msg, contents)
-			if isPreviousContentToolResponse(contents) {
-				contents[len(contents)-1].Parts = append(contents[len(contents)-1].Parts, toolContent.Parts...)
-			} else {
-				contents = append(contents, toolContent)
-			}
-
-		default:
-			content := convertLLMMessageToGeminiContent(&msg)
-			if content != nil {
-				contents = append(contents, content)
-			}
-		}
-	}
-
-	req.SystemInstruction = systemInstruction
-	req.Contents = contents
+	req.SystemInstruction, req.Contents = convertLLMMessagesToGemini(chatReq.Messages)
 
 	// Convert tools
 	if len(chatReq.Tools) > 0 {
@@ -332,6 +292,81 @@ func hasStrictFunctionTool(tools []llm.Tool) bool {
 	return false
 }
 
+// convertLLMMessagesToGemini splits leading system/developer messages into
+// systemInstruction and converts the remaining conversation into Gemini contents.
+// Mid-conversation system/developer messages are degraded to "user" turns in place
+// so they do not mutate token 0 and invalidate Gemini/Vertex implicit prefix caching.
+func convertLLMMessagesToGemini(messages []llm.Message) (*Content, []*Content) {
+	var (
+		systemInstruction          *Content
+		deferredSystemContents     []*Content
+		hasEncounteredConversation bool
+	)
+
+	contents := make([]*Content, 0)
+
+	for i := range messages {
+		msg := &messages[i]
+
+		switch msg.Role {
+		case "system", "developer":
+			if !hasEncounteredConversation {
+				systemInstruction = appendSystemInstructionParts(systemInstruction, extractPartsFromLLMMessage(msg))
+				continue
+			}
+
+			content := convertLLMMessageToGeminiContent(msg)
+			if content == nil {
+				continue
+			}
+
+			if hasUpcomingToolMessage(messages, i+1) {
+				deferredSystemContents = append(deferredSystemContents, content)
+				continue
+			}
+
+			contents = append(contents, content)
+
+		case "tool":
+			hasEncounteredConversation = true
+
+			toolContent := convertLLMToolResultToGeminiContent(msg, contents)
+			if isPreviousContentToolResponse(contents) {
+				contents[len(contents)-1].Parts = append(contents[len(contents)-1].Parts, toolContent.Parts...)
+			} else {
+				contents = append(contents, toolContent)
+			}
+
+			if !hasUpcomingToolMessage(messages, i+1) && len(deferredSystemContents) > 0 {
+				contents = append(contents, deferredSystemContents...)
+				deferredSystemContents = nil
+			}
+
+		default:
+			hasEncounteredConversation = true
+
+			if content := convertLLMMessageToGeminiContent(msg); content != nil {
+				contents = append(contents, content)
+			}
+		}
+	}
+
+	return systemInstruction, contents
+}
+
+func appendSystemInstructionParts(systemInstruction *Content, parts []*Part) *Content {
+	if len(parts) == 0 {
+		return systemInstruction
+	}
+
+	if systemInstruction == nil {
+		return &Content{Parts: parts}
+	}
+
+	systemInstruction.Parts = append(systemInstruction.Parts, parts...)
+	return systemInstruction
+}
+
 // convertLLMMessageToGeminiContent converts an LLM Message to Gemini Content.
 func convertLLMMessageToGeminiContent(msg *llm.Message) *Content {
 	if msg == nil {
@@ -370,7 +405,7 @@ func convertLLMMessageToGeminiContent(msg *llm.Message) *Content {
 		for _, part := range msg.Content.MultipleContent {
 			switch part.Type {
 			case "text":
-				if part.Text != nil {
+				if part.Text != nil && *part.Text != "" {
 					p := &Part{Text: *part.Text}
 					parts = append(parts, p)
 					lastPart = p
@@ -558,6 +593,23 @@ func findToolNameByToolCallID(contents []*Content, id string) string {
 	}
 
 	return ""
+}
+
+// hasUpcomingToolMessage reports whether the first message at or after startIdx
+// that is not a system/developer message is a tool response. It is used to keep
+// mid-conversation system/developer messages from splitting a functionCall from
+// its functionResponse turns.
+func hasUpcomingToolMessage(messages []llm.Message, startIdx int) bool {
+	for i := startIdx; i < len(messages); i++ {
+		role := messages[i].Role
+		if role == "system" || role == "developer" {
+			continue
+		}
+
+		return role == "tool"
+	}
+
+	return false
 }
 
 // isPreviousContentToolResponse checks if the last content entry is a tool response

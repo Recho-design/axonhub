@@ -60,9 +60,11 @@ func convertLLMRoleToGeminiRole(role string) string {
 		return "model"
 	case "user":
 		return "user"
-	case "developer":
-		// Developer role is treated as system-equivalent and handled in system instruction
-		// Convert to user for any content that needs to be processed as regular content
+	case "system", "developer":
+		// Gemini contents only accept "user" and "model". A system/developer
+		// message that appears after the conversation has started is degraded to
+		// "user" in place, so it never rewrites the leading systemInstruction
+		// (which would break implicit prefix caching).
 		return "user"
 	default:
 		return role
