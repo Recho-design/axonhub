@@ -4190,3 +4190,69 @@ func TestOutboundTransformer_PureLeadingSystemReturnsInvalidRequest(t *testing.T
 	require.ErrorIs(t, err, transformer.ErrInvalidRequest)
 	require.Nil(t, result)
 }
+
+func TestConvertLLMToGeminiRequest_NoArgToolsAlwaysEmitObjectSchema(t *testing.T) {
+	jsonSchema := json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`)
+
+	result := convertLLMToGeminiRequest(&llm.Request{
+		Messages: []llm.Message{{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("hi")}}},
+		Tools: []llm.Tool{
+			{Type: "function", Function: llm.Function{Name: "both_nil"}},
+			{Type: "function", Function: llm.Function{Name: "null_params", Parameters: json.RawMessage("null")}},
+			{Type: "function", Function: llm.Function{Name: "empty_params", Parameters: json.RawMessage("{}")}},
+			{Type: "function", Function: llm.Function{Name: "schema_only", ParametersJsonSchema: jsonSchema}},
+		},
+	})
+
+	require.NotNil(t, result.Tools)
+	require.Len(t, result.Tools, 1)
+	require.Len(t, result.Tools[0].FunctionDeclarations, 4)
+
+	fds := result.Tools[0].FunctionDeclarations
+	for _, fd := range fds {
+		require.Nil(t, fd.Parameters, "Gemini outbound must not populate the legacy parameters field")
+	}
+
+	for _, fd := range fds[:3] {
+		require.JSONEq(t, `{"type":"object","properties":{}}`, string(fd.ParametersJsonSchema),
+			"no-argument tool %q must send a record schema", fd.Name)
+	}
+	require.JSONEq(t, string(jsonSchema), string(fds[3].ParametersJsonSchema))
+}
+
+func TestConvertLLMToGeminiRequest_ResponseFormatWithoutUsableSchema(t *testing.T) {
+	for _, raw := range []string{
+		`{"name":"out","schema":null}`,
+		`{"name":"out","schema":{}}`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			result := convertLLMToGeminiRequest(&llm.Request{
+				Messages: []llm.Message{{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("hi")}}},
+				ResponseFormat: &llm.ResponseFormat{
+					Type:       "json_schema",
+					JSONSchema: json.RawMessage(raw),
+				},
+			})
+
+			require.NotNil(t, result.GenerationConfig)
+			require.Nil(t, result.GenerationConfig.ResponseJsonSchema,
+				"Gemini rejects a null or empty object responseJsonSchema")
+			require.Equal(t, "application/json", result.GenerationConfig.ResponseMIMEType)
+		})
+	}
+
+	t.Run("usable schema is forwarded", func(t *testing.T) {
+		schema := json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}}}`)
+		result := convertLLMToGeminiRequest(&llm.Request{
+			Messages: []llm.Message{{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("hi")}}},
+			ResponseFormat: &llm.ResponseFormat{
+				Type:       "json_schema",
+				JSONSchema: json.RawMessage(`{"name":"out","schema":` + string(schema) + `}`),
+			},
+		})
+
+		require.NotNil(t, result.GenerationConfig)
+		require.JSONEq(t, string(schema), string(result.GenerationConfig.ResponseJsonSchema))
+		require.Equal(t, "application/json", result.GenerationConfig.ResponseMIMEType)
+	})
+}

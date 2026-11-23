@@ -316,6 +316,10 @@ func applyPassThroughRequestHeaders(outbound *PersistentOutboundTransformer) pip
 func mergePassThroughRequestBody(rawBody []byte, apiFormat llm.APIFormat, model string) ([]byte, error) {
 	body := append([]byte(nil), rawBody...)
 
+	// Patch null tool schemas before the model-patch early return: Gemini encodes the
+	// model in the URL, so it returns below but still needs the schema repair.
+	body = sanitizeNullToolSchemasInRawBody(body, apiFormat)
+
 	if !passThroughBodyNeedsModelPatch(apiFormat) {
 		return body, nil
 	}

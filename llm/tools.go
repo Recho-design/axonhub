@@ -6,11 +6,17 @@ import (
 	"errors"
 	"slices"
 	"strings"
+
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // EmptyObjectSchema is the JSON Schema for a no-argument function: an object
 // with no properties. Schema-strict providers (notably Gemini, which rejects a
 // null parameters with "expected record, received null") require an object.
+//
+// The value is a shared template. Every accessor below returns a clone, so a
+// caller mutating its result cannot corrupt the package-level template.
 var EmptyObjectSchema = json.RawMessage(`{"type":"object","properties":{}}`)
 
 // StrictEmptyObjectSchema is EmptyObjectSchema made strict-mode compatible:
@@ -18,37 +24,242 @@ var EmptyObjectSchema = json.RawMessage(`{"type":"object","properties":{}}`)
 // and a required array listing every key (none, here) even for empty objects.
 var StrictEmptyObjectSchema = json.RawMessage(`{"type":"object","properties":{},"required":[],"additionalProperties":false}`)
 
-// NormalizeEmptySchema returns schema unchanged unless it is nil, blank, or the
-// literal JSON null, in which case it returns EmptyObjectSchema. Clients
-// frequently declare no-argument tools with "parameters": null or with the
-// field omitted; forwarding that null verbatim breaks upstreams (e.g.
-// OpenAI-compat relays in front of Gemini) whose validation expects a record.
+// emptyObjectShellKeys is the whitelist of keys a no-argument object schema may
+// carry. Anything else (anyOf, patternProperties, $ref, enum, ...) makes the
+// schema a real constraint that must never be rewritten.
+var emptyObjectShellKeys = map[string]struct{}{
+	"type":                 {},
+	"properties":           {},
+	"required":             {},
+	"additionalProperties": {},
+	"description":          {},
+	"title":                {},
+	"$schema":              {},
+	"$id":                  {},
+	"$comment":             {},
+	"strict":               {},
+	"examples":             {},
+	"default":              {},
+}
+
+// emptyObjectShellStructuralKeys are the fields that describe the lack of
+// arguments. Their presence alone does not make a schema "decorated".
+var emptyObjectShellStructuralKeys = map[string]struct{}{
+	"type":                 {},
+	"properties":           {},
+	"required":             {},
+	"additionalProperties": {},
+}
+
+// NormalizeEmptySchema returns a clone of EmptyObjectSchema when schema is nil,
+// blank, the literal JSON null, or an empty object; it also fills the missing
+// properties of a no-argument object shell. Clients frequently declare
+// no-argument tools with "parameters": null or with the field omitted;
+// forwarding that verbatim breaks upstreams (e.g. OpenAI-compat relays in
+// front of Gemini) whose validation expects a record.
 func NormalizeEmptySchema(schema json.RawMessage) json.RawMessage {
+	return NormalizeFunctionParameters(schema, nil)
+}
+
+// NormalizeFunctionParameters normalizes an OpenAI-style function parameters
+// schema for outbound requests. nil, blank, "null", and "{}" become a clone of
+// EmptyObjectSchema — or of StrictEmptyObjectSchema when the tool is in strict
+// mode, whose validator rejects a schema lacking additionalProperties: false.
+// A no-argument object shell such as {"type":"object"} gains an empty
+// properties map. Any other schema is returned as the original slice.
+func NormalizeFunctionParameters(schema json.RawMessage, strict *bool) json.RawMessage {
 	if isEmptySchema(schema) {
-		return EmptyObjectSchema
+		return cloneEmptyObjectSchema(strict)
+	}
+	if normalized, ok := normalizeEmptyObjectShell(schema, strict); ok {
+		return normalized
 	}
 	return schema
 }
 
-// NormalizeFunctionParameters normalizes an OpenAI-style function parameters
-// schema for outbound requests. nil, blank, and literal JSON null become
-// EmptyObjectSchema — or StrictEmptyObjectSchema when the tool is in strict
-// mode, whose validator rejects a schema lacking additionalProperties: false.
-// Valid schemas pass through unchanged.
-func NormalizeFunctionParameters(schema json.RawMessage, strict *bool) json.RawMessage {
-	if !isEmptySchema(schema) {
-		return schema
-	}
+// cloneEmptyObjectSchema returns a fresh copy of the empty object template so
+// callers cannot mutate the package-level value.
+func cloneEmptyObjectSchema(strict *bool) json.RawMessage {
 	if strict != nil && *strict {
-		return StrictEmptyObjectSchema
+		return slices.Clone(StrictEmptyObjectSchema)
 	}
-	return EmptyObjectSchema
+	return slices.Clone(EmptyObjectSchema)
 }
 
-// isEmptySchema reports whether schema is nil, blank, or the literal JSON null.
+// isEmptySchema reports whether schema is nil, blank, the literal JSON null, or
+// the empty object literal.
 func isEmptySchema(schema json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(schema)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("{}"))
+}
+
+// isNullOrBlankSchema reports whether schema is nil, blank, or literal null.
+func isNullOrBlankSchema(schema json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(schema)
 	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
+}
+
+// isBlankObjectSchema reports whether schema is the empty object literal.
+func isBlankObjectSchema(schema json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(schema), []byte("{}"))
+}
+
+// normalizeEmptyObjectShell detects a no-argument object schema and returns the
+// normalized form. The second result reports whether schema was a shell; when
+// it is false the caller must keep the original slice untouched.
+//
+// Detection is deliberately conservative: only objects whose every key is on
+// emptyObjectShellKeys, whose type is absent or "object", whose properties are
+// absent/null/empty, whose required is absent/null/empty, and whose
+// additionalProperties is absent or false qualify. Dynamic dictionaries
+// (additionalProperties as a schema or true) and constraint-bearing schemas
+// therefore pass through byte-for-byte.
+func normalizeEmptyObjectShell(schema json.RawMessage, strict *bool) (json.RawMessage, bool) {
+	trimmed := bytes.TrimSpace(schema)
+	if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' || !gjson.ValidBytes(trimmed) {
+		return nil, false
+	}
+
+	root := gjson.ParseBytes(trimmed)
+	if !isEmptyObjectShell(root) {
+		return nil, false
+	}
+
+	if isCompleteEmptyObjectShell(root, strict) {
+		return nil, false
+	}
+
+	if shouldDecorateEmptyObjectShell(root) {
+		return decorateEmptyObjectShell(trimmed, strict)
+	}
+
+	return cloneEmptyObjectSchema(strict), true
+}
+
+// isCompleteEmptyObjectShell reports whether root already satisfies the empty
+// object schema contract (including strict-mode fields when requested). Keeping
+// the original slice preserves key order, whitespace, and upstream prompt caches.
+func isCompleteEmptyObjectShell(root gjson.Result, strict *bool) bool {
+	typeField := root.Get("type")
+	props := root.Get("properties")
+	required := root.Get("required")
+
+	explicitObjectType := typeField.Exists() && typeField.Type == gjson.String && typeField.String() == "object"
+	propsEmptyObject := props.Exists() && props.IsObject() && len(props.Map()) == 0
+	requiredIsNull := required.Exists() && required.Type == gjson.Null
+	if !explicitObjectType || !propsEmptyObject || requiredIsNull {
+		return false
+	}
+
+	if strict == nil || !*strict {
+		return true
+	}
+
+	ap := root.Get("additionalProperties")
+	return ap.Exists() && ap.Type == gjson.False && required.Exists() && required.IsArray() && len(required.Array()) == 0
+}
+
+// shouldDecorateEmptyObjectShell reports whether root carries metadata,
+// additionalProperties: false, or a stale required: null that must be patched
+// in place rather than collapsed to the bare empty template.
+func shouldDecorateEmptyObjectShell(root gjson.Result) bool {
+	for key := range root.Map() {
+		if _, structural := emptyObjectShellStructuralKeys[key]; !structural {
+			return true
+		}
+	}
+
+	ap := root.Get("additionalProperties")
+	required := root.Get("required")
+	return (ap.Exists() && ap.Type == gjson.False) || (required.Exists() && required.Type == gjson.Null)
+}
+
+// isEmptyObjectShell reports whether root is a no-argument object schema: an
+// object whose type is absent or "object", whose properties/required are
+// absent/null/empty, whose additionalProperties is absent or false, and whose
+// every key is on the metadata whitelist.
+func isEmptyObjectShell(root gjson.Result) bool {
+	if !root.IsObject() {
+		return false
+	}
+	if !isEmptyObjectShellChild(root.Get("type"), "object") {
+		return false
+	}
+
+	if props := root.Get("properties"); props.Exists() && props.Type != gjson.Null && (!props.IsObject() || len(props.Map()) != 0) {
+		return false
+	}
+
+	if required := root.Get("required"); required.Exists() && required.Type != gjson.Null && (!required.IsArray() || len(required.Array()) != 0) {
+		return false
+	}
+
+	if ap := root.Get("additionalProperties"); ap.Exists() && ap.Type != gjson.False {
+		return false
+	}
+
+	for key := range root.Map() {
+		if _, ok := emptyObjectShellKeys[key]; !ok {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isEmptyObjectShellChild reports whether an optional "type" field is absent or
+// the expected string value. A present non-string or different type is a real
+// constraint.
+func isEmptyObjectShellChild(typ gjson.Result, want string) bool {
+	if !typ.Exists() {
+		return true
+	}
+	return typ.Type == gjson.String && typ.String() == want
+}
+
+// decorateEmptyObjectShell fills in the structural fields of a decorated
+// no-argument shell, preserving its description/title metadata and any
+// additionalProperties: false constraint. It deletes a stale required: null.
+func decorateEmptyObjectShell(schema json.RawMessage, strict *bool) (json.RawMessage, bool) {
+	out, err := sjson.SetRawBytes(slices.Clone(schema), "type", []byte(`"object"`))
+	if err != nil {
+		return nil, false
+	}
+	out, err = sjson.SetRawBytes(out, "properties", []byte(`{}`))
+	if err != nil {
+		return nil, false
+	}
+	if strict != nil && *strict {
+		out, err = sjson.SetRawBytes(out, "required", []byte(`[]`))
+		if err != nil {
+			return nil, false
+		}
+		out, err = sjson.SetBytes(out, "additionalProperties", false)
+		if err != nil {
+			return nil, false
+		}
+	} else if required := gjson.GetBytes(out, "required"); required.Exists() && required.Type == gjson.Null {
+		out, err = sjson.DeleteBytes(out, "required")
+		if err != nil {
+			return nil, false
+		}
+	}
+	return out, true
+}
+
+// IsEmptyObjectSchema reports whether schema is a no-argument object shell:
+// nil, blank, the literal null, the empty object, or an object with no
+// properties. Providers such as Gemini reject such a schema as a response
+// schema, so callers use this to fall back or drop it.
+func IsEmptyObjectSchema(schema json.RawMessage) bool {
+	if isEmptySchema(schema) {
+		return true
+	}
+	trimmed := bytes.TrimSpace(schema)
+	if !gjson.ValidBytes(trimmed) {
+		return false
+	}
+	return isEmptyObjectShell(gjson.ParseBytes(trimmed))
 }
 
 // Tool represents a function tool.
@@ -99,6 +310,31 @@ type Function struct {
 	// e.g. ["direct"] or ["code_execution_20250825"]. Anthropic-only today;
 	// other providers have no equivalent and keep dropping it.
 	AllowedCallers []string `json:"allowed_callers,omitempty"`
+}
+
+// EffectiveParameters returns the function's parameters schema from whichever
+// representation actually carries it. Gemini's newer inbound format populates
+// ParametersJsonSchema while the classic format uses Parameters, so a
+// transformer converting Gemini to another protocol must consult both.
+//
+// An empty "{}" ParametersJsonSchema yields to a usable Parameters schema. When
+// neither field holds a value, a non-nil ParametersJsonSchema is returned even
+// if it is the literal "null", so callers can still tell an explicit null from
+// an omitted field.
+func (f Function) EffectiveParameters() json.RawMessage {
+	if !isNullOrBlankSchema(f.ParametersJsonSchema) {
+		if isBlankObjectSchema(f.ParametersJsonSchema) && !isNullOrBlankSchema(f.Parameters) && !isBlankObjectSchema(f.Parameters) {
+			return f.Parameters
+		}
+		return f.ParametersJsonSchema
+	}
+	if !isNullOrBlankSchema(f.Parameters) {
+		return f.Parameters
+	}
+	if f.ParametersJsonSchema != nil {
+		return f.ParametersJsonSchema
+	}
+	return f.Parameters
 }
 
 // FunctionCall represents a function call (deprecated).

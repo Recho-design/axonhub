@@ -1066,6 +1066,23 @@ func TestConvertToolsToLLM_Namespace(t *testing.T) {
 	require.Empty(t, tools[1].Function.Namespace)
 }
 
+func TestConvertToolsToLLM_OmittedParametersStayNil(t *testing.T) {
+	tools, err := convertToolsToLLM([]Tool{
+		{Type: "function", Name: "plain"},
+		{Type: "function", Name: "empty", Parameters: map[string]any{}},
+		{Type: "namespace", Name: "ns", Tools: []Tool{{Type: "function", Name: "sub"}}},
+	})
+	require.NoError(t, err)
+	require.Len(t, tools, 3)
+
+	require.Nil(t, tools[0].Function.Parameters,
+		"an omitted parameters field must not become json.RawMessage(\"null\")")
+	require.JSONEq(t, "{}", string(tools[1].Function.Parameters),
+		"an explicit empty object must stay an empty object")
+	require.Nil(t, tools[2].Function.Parameters,
+		"namespace sub-tools must not gain a null parameters field")
+}
+
 func TestConvertItemToMessage_Compaction(t *testing.T) {
 	tests := []struct {
 		name     string

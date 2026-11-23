@@ -132,3 +132,4 @@ Implementation conventions distilled from Heavy tasks live in `.agents/specs/`:
 |------|-------|-------------|
 | [model-level-channel-health.md](.agents/specs/model-level-channel-health.md) | `internal/server/biz/channel_metrics.go`, `internal/server/orchestrator/**` | 模型级渠道健康键、候选重排、AttemptSeq 所有权 |
 | [channel-model-multi-model-association.md](.agents/specs/channel-model-multi-model-association.md) | `internal/objects/model.go`, `internal/server/biz/**`, `frontend/src/features/models/**` | channel_model 多模型 modelIds 存储契约、兼容归一、strict 多选控件 |
+| [tool-schema-normalization.md](.agents/specs/tool-schema-normalization.md) | `llm/tools.go`, `llm/transformer/**`, `internal/server/orchestrator/pass_through_tool_schema.go` | 函数工具参数 Schema 的空值归一、空壳判定白名单、Gemini oneof 互斥与直通 null 修补契约 |

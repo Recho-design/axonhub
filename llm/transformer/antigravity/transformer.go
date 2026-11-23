@@ -1,6 +1,7 @@
 package antigravity
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -135,6 +136,14 @@ func (t *Transformer) APIFormat() llm.APIFormat {
 	return llm.APIFormatGeminiContents
 }
 
+// AllowPassThroughBody disables raw Gemini body pass-through. Antigravity wraps
+// the Gemini request in its own {"project","model","request"} envelope, so
+// overwriting it with the client's raw Gemini body would produce an invalid
+// upstream request.
+func (t *Transformer) AllowPassThroughBody(context.Context, *llm.Request, *httpclient.Request) bool {
+	return false
+}
+
 // TransformRequest transforms the unified request to Antigravity HTTP request.
 func (t *Transformer) TransformRequest(ctx context.Context, llmReq *llm.Request) (*httpclient.Request, error) {
 	if llmReq == nil {
@@ -246,30 +255,56 @@ func (t *Transformer) TransformRequest(ctx context.Context, llmReq *llm.Request)
 	return httpReq, nil
 }
 
+// isObjectJSON reports whether raw is a non-null JSON object. Non-object JSON
+// such as false or [1] is rejected so it cannot shadow a usable fallback.
+func isObjectJSON(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return false
+	}
+	var obj map[string]json.RawMessage
+	return json.Unmarshal(trimmed, &obj) == nil && obj != nil
+}
+
+// usableAntigravityResponseSchema reports whether raw is a JSON object schema
+// with actual content. Empty object shells are rejected because Antigravity
+// refuses a response schema whose object type carries no properties.
+func usableAntigravityResponseSchema(raw json.RawMessage) bool {
+	return isObjectJSON(raw) && !llm.IsEmptyObjectSchema(raw)
+}
+
 func (t *Transformer) patchGeminiRequest(ctx context.Context, req *gemini.GenerateContentRequest, llmReq *llm.Request) error {
 	// A. Schema Sanitization
-	// Priority: ResponseJsonSchema first (set by Gemini transformer), then ResponseSchema
+	// Priority: ResponseJsonSchema first (set by Gemini transformer), then
+	// ResponseSchema. A null or property-less empty shell in ResponseJsonSchema
+	// must not shadow a usable ResponseSchema.
 	if req.GenerationConfig != nil {
-		var schemaData json.RawMessage
-		if len(req.GenerationConfig.ResponseJsonSchema) > 0 {
-			schemaData = req.GenerationConfig.ResponseJsonSchema
-		} else if len(req.GenerationConfig.ResponseSchema) > 0 {
+		schemaData := req.GenerationConfig.ResponseJsonSchema
+		if !usableAntigravityResponseSchema(schemaData) {
 			schemaData = req.GenerationConfig.ResponseSchema
 		}
+		if !usableAntigravityResponseSchema(schemaData) {
+			schemaData = nil
+		}
 
-		if len(schemaData) > 0 {
-			var schema map[string]any
-			if err := json.Unmarshal(schemaData, &schema); err == nil {
-				sanitized := SanitizeJSONSchema(schema)
-				// CRITICAL: Uppercase all type values for Antigravity API
-				sanitized = UppercaseSchemaTypes(sanitized)
-				// Set to ResponseSchema field (what Antigravity expects)
-				req.GenerationConfig.ResponseSchema = xjson.MustMarshal(sanitized)
-				// Clear ResponseJsonSchema to avoid sending both
-				req.GenerationConfig.ResponseJsonSchema = nil
-			} else {
+		// Antigravity must never receive the camelCase field.
+		req.GenerationConfig.ResponseJsonSchema = nil
+
+		var schema map[string]any
+		if err := json.Unmarshal(schemaData, &schema); err == nil && len(schema) > 0 {
+			sanitized := SanitizeJSONSchema(schema)
+			// CRITICAL: Uppercase all type values for Antigravity API
+			sanitized = UppercaseSchemaTypes(sanitized)
+			// Set to ResponseSchema field (what Antigravity expects)
+			req.GenerationConfig.ResponseSchema = xjson.MustMarshal(sanitized)
+		} else {
+			if err != nil && len(schemaData) > 0 {
 				slog.DebugContext(ctx, "failed to unmarshal response schema", slog.Any("error", err))
 			}
+			// Antigravity rejects a null/empty response schema; clear both fields
+			// so no stale "null" survives in the request.
+			req.GenerationConfig.ResponseJsonSchema = nil
+			req.GenerationConfig.ResponseSchema = nil
 		}
 	}
 
@@ -284,31 +319,38 @@ func (t *Transformer) patchGeminiRequest(ctx context.Context, req *gemini.Genera
 			// The Gemini transformer sets ParametersJsonSchema, but Antigravity uses strict
 			// protobuf validation and only accepts "parameters" (lowercase, no camelCase)
 
-			// Priority: ParametersJsonSchema first (set by Gemini transformer), then Parameters
-			var schemaData json.RawMessage
-			if len(fd.ParametersJsonSchema) > 0 {
-				schemaData = fd.ParametersJsonSchema
-			} else if len(fd.Parameters) > 0 {
+			// Priority: a usable JSON-object ParametersJsonSchema, then Parameters.
+			// A non-object ParametersJsonSchema (false, [1], ...) must not shadow a
+			// usable Parameters. Normalization guarantees no-argument tools still
+			// get {"type":"object","properties":{}}.
+			schemaData := fd.ParametersJsonSchema
+			if !isObjectJSON(schemaData) {
 				schemaData = fd.Parameters
 			}
+			schemaData = llm.NormalizeEmptySchema(schemaData)
 
-			if len(schemaData) > 0 {
-				var schema map[string]any
-				if err := json.Unmarshal(schemaData, &schema); err == nil {
-					// Apply sanitization transformations
-					sanitized := SanitizeJSONSchema(schema)
-					// CRITICAL: Uppercase all type values (object -> OBJECT, string -> STRING)
-					// Antigravity API expects uppercase types per protobuf spec
-					// Reference: opencode-antigravity-auth/src/plugin/transform/gemini.ts toGeminiSchema()
-					sanitized = UppercaseSchemaTypes(sanitized)
-					// Set to Parameters field (what Antigravity expects)
-					fd.Parameters = xjson.MustMarshal(sanitized)
-					// Clear ParametersJsonSchema to avoid sending both
-					fd.ParametersJsonSchema = nil
-				} else {
+			var schema map[string]any
+			if err := json.Unmarshal(schemaData, &schema); err != nil || schema == nil {
+				if err != nil {
 					slog.DebugContext(ctx, "failed to unmarshal tool parameters", slog.String("tool", fd.Name), slog.Any("error", err))
 				}
+				// Never let a stale "null"/invalid Parameters survive; fall back to
+				// the empty object schema Antigravity accepts.
+				schema = map[string]any{"type": "object", "properties": map[string]any{}}
 			}
+
+			// Apply sanitization transformations
+			sanitized := SanitizeJSONSchema(schema)
+			// CRITICAL: Uppercase all type values (object -> OBJECT, string -> STRING)
+			// Antigravity API expects uppercase types per protobuf spec
+			// Reference: opencode-antigravity-auth/src/plugin/transform/gemini.ts toGeminiSchema()
+			sanitized = UppercaseSchemaTypes(sanitized)
+			// Set to Parameters field (what Antigravity expects)
+			fd.Parameters = xjson.MustMarshal(sanitized)
+
+			// Antigravity does not support parametersJsonSchema at all; never let
+			// the camelCase field survive, even when unmarshalling failed.
+			fd.ParametersJsonSchema = nil
 		}
 	}
 

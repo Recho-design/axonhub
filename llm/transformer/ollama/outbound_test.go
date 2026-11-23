@@ -297,3 +297,36 @@ func TestAggregateStreamChunksKeepsToolCallsFromAllChunks(t *testing.T) {
 	require.Equal(t, "get_time", calls[1].Function.Name)
 	require.NotEqual(t, calls[0].ID, calls[1].ID)
 }
+
+func TestTransformRequestNoArgToolParameters(t *testing.T) {
+	transformer, err := NewOutboundTransformerWithConfig(&Config{
+		BaseURL: "http://localhost:11434",
+	})
+	require.NoError(t, err)
+
+	jsonSchema := json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`)
+
+	req, err := transformer.TransformRequest(context.Background(), &llm.Request{
+		Model: "qwen3",
+		Messages: []llm.Message{
+			{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("hi")}},
+		},
+		Tools: []llm.Tool{
+			{Type: llm.ToolTypeFunction, Function: llm.Function{Name: "both_nil"}},
+			{Type: llm.ToolTypeFunction, Function: llm.Function{Name: "null_params", Parameters: json.RawMessage("null")}},
+			{Type: llm.ToolTypeFunction, Function: llm.Function{Name: "empty_params", Parameters: json.RawMessage("{}")}},
+			{Type: llm.ToolTypeFunction, Function: llm.Function{Name: "schema_only", ParametersJsonSchema: jsonSchema}},
+		},
+	})
+	require.NoError(t, err)
+
+	var got ChatRequest
+	require.NoError(t, json.Unmarshal(req.Body, &got))
+	require.Len(t, got.Tools, 4)
+
+	for _, tool := range got.Tools[:3] {
+		require.JSONEq(t, `{"type":"object","properties":{}}`, string(tool.Function.Parameters),
+			"no-argument tool %q must send a record schema", tool.Function.Name)
+	}
+	require.JSONEq(t, string(jsonSchema), string(got.Tools[3].Function.Parameters))
+}

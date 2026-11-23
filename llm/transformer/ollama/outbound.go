@@ -166,10 +166,7 @@ func (t *OutboundTransformer) TransformRequest(ctx context.Context, llmReq *llm.
 			continue
 		}
 
-		parameters := tool.Function.Parameters
-		if parameters == nil {
-			parameters = json.RawMessage("{}")
-		}
+		parameters := llm.NormalizeEmptySchema(tool.Function.EffectiveParameters())
 
 		ollamaReq.Tools = append(ollamaReq.Tools, ollamaToolDefinition{
 			Type: "function",

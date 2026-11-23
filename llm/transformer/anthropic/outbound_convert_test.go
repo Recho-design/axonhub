@@ -1306,3 +1306,67 @@ func TestConvertToolsAnthropic_NullParameters(t *testing.T) {
 	require.NoError(t, json.Unmarshal(result[0].InputSchema, &schema))
 	require.Equal(t, "object", schema["type"])
 }
+
+func TestConvertToolsAnthropic_NormalizesEmptyAndCrossProtocolSchemas(t *testing.T) {
+	jsonSchema := json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`)
+
+	tests := []struct {
+		name string
+		fn   llm.Function
+		want json.RawMessage
+	}{
+		{
+			name: "nil parameters become empty object schema",
+			fn:   llm.Function{Name: "noop"},
+			want: llm.EmptyObjectSchema,
+		},
+		{
+			name: "null parameters become empty object schema",
+			fn:   llm.Function{Name: "null_params", Parameters: json.RawMessage("null")},
+			want: llm.EmptyObjectSchema,
+		},
+		{
+			name: "empty object parameters become empty object schema",
+			fn:   llm.Function{Name: "empty_params", Parameters: json.RawMessage("{}")},
+			want: llm.EmptyObjectSchema,
+		},
+		{
+			name: "parametersJsonSchema only is used for cross-protocol tools",
+			fn:   llm.Function{Name: "schema_only", ParametersJsonSchema: jsonSchema},
+			want: jsonSchema,
+		},
+		{
+			name: "strict nil parameters include strict members",
+			fn:   llm.Function{Name: "strict_noop", Strict: lo.ToPtr(true)},
+			want: llm.StrictEmptyObjectSchema,
+		},
+		{
+			name: "strict empty object parameters include strict members",
+			fn:   llm.Function{Name: "strict_empty", Parameters: json.RawMessage("{}"), Strict: lo.ToPtr(true)},
+			want: llm.StrictEmptyObjectSchema,
+		},
+		{
+			name: "strict decorated shell keeps description and only fills structure",
+			fn: llm.Function{
+				Name:       "strict_decorated",
+				Parameters: json.RawMessage(`{"type":"object","description":"no args"}`),
+				Strict:     lo.ToPtr(true),
+			},
+			want: json.RawMessage(`{"type":"object","properties":{},"required":[],"additionalProperties":false,"description":"no args"}`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := convertToolsAnthropic([]llm.Tool{{Type: llm.ToolTypeFunction, Function: tt.fn}}, nil)
+			require.Len(t, result, 1)
+			require.JSONEq(t, string(tt.want), string(result[0].InputSchema))
+
+			var schema map[string]any
+			require.NoError(t, json.Unmarshal(result[0].InputSchema, &schema))
+			if tt.fn.Strict != nil && *tt.fn.Strict {
+				require.Equal(t, false, schema["additionalProperties"])
+			}
+		})
+	}
+}

@@ -30,6 +30,7 @@ func transformSchemaRecursive(schema *jsonschema.Schema, transform func(*jsonsch
 	lo.ForEach([]*jsonschema.Schema{
 		schema.Items,
 		schema.AdditionalItems,
+		schema.AdditionalProperties,
 		schema.Contains,
 		schema.Not,
 		schema.If,

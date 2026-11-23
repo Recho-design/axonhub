@@ -1,6 +1,7 @@
 package responses
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"unicode/utf8"
@@ -37,7 +38,11 @@ func convertToTextOptions(chatReq *llm.Request) *TextOptions {
 			if err := json.Unmarshal(chatReq.ResponseFormat.JSONSchema, &jsonSchema); err == nil {
 				result.Format.Name = jsonSchema.Name
 				result.Format.Description = jsonSchema.Description
-				result.Format.Schema = jsonSchema.Schema
+				// A nil/blank/null schema must stay absent; assigning "null"
+				// would serialize as "schema": null upstream.
+				if trimmed := bytes.TrimSpace(jsonSchema.Schema); len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
+					result.Format.Schema = jsonSchema.Schema
+				}
 				result.Format.Strict = jsonSchema.Strict
 			}
 		}
@@ -494,62 +499,104 @@ func convertFunctionToTool(src llm.Tool) Tool {
 		Strict:      src.Function.Strict,
 	}
 
-	// Convert parameters from json.RawMessage to map[string]any
-	if len(src.Function.Parameters) > 0 {
-		var params map[string]any
-		if err := json.Unmarshal(src.Function.Parameters, &params); err == nil {
-			// Handle nil map panic - initialize if nil
-			if params == nil {
-				params = map[string]any{}
+	rawParams := src.Function.EffectiveParameters()
+	if len(rawParams) == 0 {
+		// Responses clients may declare no-argument tools by omitting
+		// parameters entirely; preserving that omission keeps same-protocol
+		// pass-through byte-identical. Strict mode, however, requires the
+		// additionalProperties:false member, so emit the strict empty schema.
+		if src.Function.Strict != nil && *src.Function.Strict {
+			applyResponsesParameters(&tool, llm.NormalizeFunctionParameters(rawParams, src.Function.Strict), src.Function.Strict)
+		}
+		return tool
+	}
+
+	// "null", "{}" and empty object shells all normalize to a real record
+	// schema, so the emitted parameters object is never dropped by omitempty.
+	applyResponsesParameters(&tool, llm.NormalizeFunctionParameters(rawParams, src.Function.Strict), src.Function.Strict)
+
+	return tool
+}
+
+// applyResponsesParameters unmarshals a normalized schema and applies the
+// Responses/OpenAI structural requirements to it.
+func applyResponsesParameters(tool *Tool, normalized json.RawMessage, strict *bool) {
+	var params map[string]any
+	if err := json.Unmarshal(normalized, &params); err != nil {
+		return
+	}
+	// Handle nil map panic - initialize if nil
+	if params == nil {
+		params = map[string]any{}
+	}
+
+	// The incoming normalized schema already came through
+	// llm.NormalizeFunctionParameters, which fills the properties of every true
+	// no-argument object shell. A "type":"object" schema that still lacks
+	// properties here therefore carries a real constraint (additionalProperties
+	// dictionary, patternProperties, anyOf/oneOf/allOf, $ref, ...); forcing an
+	// empty properties map would corrupt it, so only strict mode pads the plain
+	// object case.
+	if strict != nil && *strict {
+		if typeName, ok := params["type"].(string); ok && typeName == "object" && !hasCompositionOrRef(params) {
+			if _, ok := params["properties"].(map[string]any); !ok {
+				params["properties"] = map[string]any{}
 			}
+		}
+		applyResponsesStrictParameters(params)
+	}
 
-			// OpenAI rejects object schemas that omit properties entirely.
-			// Anthropic clients may send {"type":"object"} for no-arg tools, so normalize that here.
-			if typeName, ok := params["type"].(string); ok && typeName == "object" {
-				if _, ok := params["properties"].(map[string]any); !ok {
-					params["properties"] = map[string]any{}
-				}
+	tool.Parameters = params
+}
+
+// hasCompositionOrRef reports whether a parameters map uses a union or
+// reference keyword, which means an empty properties map would not describe it.
+func hasCompositionOrRef(params map[string]any) bool {
+	for _, key := range []string{"anyOf", "oneOf", "allOf", "$ref"} {
+		if _, ok := params[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// applyResponsesStrictParameters enforces OpenAI strict-mode rules on a
+// Responses parameters map. See:
+// https://platform.openai.com/docs/guides/function-calling#strict-mode
+func applyResponsesStrictParameters(params map[string]any) {
+	// Always set additionalProperties: false for strict validation
+	// Overwrite any existing value (including true) to ensure false
+	params["additionalProperties"] = false
+
+	props, ok := params["properties"].(map[string]any)
+	if !ok || len(props) == 0 {
+		return
+	}
+
+	// When strict mode is enabled, ALL properties must be listed in "required"
+	required := make([]string, 0, len(props))
+	// First, check if there's an existing required array and preserve it
+	if existingRequired, ok := params["required"].([]any); ok {
+		for _, r := range existingRequired {
+			if s, ok := r.(string); ok {
+				required = append(required, s)
 			}
-
-			// For strict mode, additionalProperties must be false and all properties must be required
-			// See: https://platform.openai.com/docs/guides/function-calling#strict-mode
-			if src.Function.Strict != nil && *src.Function.Strict {
-				// Always set additionalProperties: false for strict validation
-				// Overwrite any existing value (including true) to ensure false
-				params["additionalProperties"] = false
-
-				// When strict mode is enabled, ALL properties must be listed in "required"
-				if props, ok := params["properties"].(map[string]any); ok && len(props) > 0 {
-					required := make([]string, 0, len(props))
-					// First, check if there's an existing required array and preserve it
-					if existingRequired, ok := params["required"].([]any); ok {
-						for _, r := range existingRequired {
-							if s, ok := r.(string); ok {
-								required = append(required, s)
-							}
-						}
-					}
-					// Add any missing property keys to required
-					requiredSet := make(map[string]bool)
-					for _, r := range required {
-						requiredSet[r] = true
-					}
-
-					for key := range props {
-						if !requiredSet[key] {
-							required = append(required, key)
-						}
-					}
-
-					params["required"] = required
-				}
-			}
-
-			tool.Parameters = params
 		}
 	}
 
-	return tool
+	requiredSet := make(map[string]bool, len(required))
+	for _, r := range required {
+		requiredSet[r] = true
+	}
+
+	// Add any missing property keys to required
+	for key := range props {
+		if !requiredSet[key] {
+			required = append(required, key)
+		}
+	}
+
+	params["required"] = required
 }
 
 // convertToolChoice converts llm.ToolChoice to Responses API ToolChoice.

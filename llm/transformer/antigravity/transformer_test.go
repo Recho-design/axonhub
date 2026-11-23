@@ -306,6 +306,83 @@ func TestTransformRequest_Antigravity(t *testing.T) {
 		assert.Equal(t, "OBJECT", parameters["type"]) // UPPERCASE, as Antigravity API expects
 		assert.NotNil(t, parameters["properties"])
 	})
+
+	t.Run("no-argument tool gets placeholder parameters", func(t *testing.T) {
+		req := &llm.Request{
+			Model: "gemini-3-pro",
+			Messages: []llm.Message{
+				{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("Help")}},
+			},
+			Tools: []llm.Tool{
+				{Type: "function", Function: llm.Function{Name: "noop"}},
+				{
+					Type: "function",
+					Function: llm.Function{
+						Name:                 "schema_only",
+						ParametersJsonSchema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`),
+					},
+				},
+			},
+		}
+
+		httpReq, err := transformer.TransformRequest(context.Background(), req)
+		require.NoError(t, err)
+
+		var envelope AntigravityEnvelope
+
+		err = json.Unmarshal(httpReq.Body, &envelope)
+		require.NoError(t, err)
+
+		innerBytes, err := json.Marshal(envelope.Request)
+		require.NoError(t, err)
+
+		var rawInner map[string]any
+
+		err = json.Unmarshal(innerBytes, &rawInner)
+		require.NoError(t, err)
+
+		tools, ok := rawInner["tools"].([]any)
+		require.True(t, ok)
+		require.NotEmpty(t, tools)
+
+		firstTool, ok := tools[0].(map[string]any)
+		require.True(t, ok)
+
+		declarations, ok := firstTool["functionDeclarations"].([]any)
+		require.True(t, ok)
+		require.Len(t, declarations, 2)
+
+		for _, rawDecl := range declarations {
+			decl, ok := rawDecl.(map[string]any)
+			require.True(t, ok)
+			_, hasParametersJsonSchema := decl["parametersJsonSchema"]
+			assert.False(t, hasParametersJsonSchema, "Antigravity never accepts parametersJsonSchema")
+		}
+
+		noopDecl, ok := declarations[0].(map[string]any)
+		require.True(t, ok)
+
+		noopParams, ok := noopDecl["parameters"].(map[string]any)
+		require.True(t, ok, "no-argument tool must still send parameters")
+		assert.Equal(t, "OBJECT", noopParams["type"])
+
+		noopProps, ok := noopParams["properties"].(map[string]any)
+		require.True(t, ok)
+		placeholder, ok := noopProps["_placeholder"].(map[string]any)
+		require.True(t, ok, "empty object schemas need the placeholder property")
+		assert.Equal(t, "BOOLEAN", placeholder["type"])
+
+		schemaDecl, ok := declarations[1].(map[string]any)
+		require.True(t, ok)
+
+		schemaParams, ok := schemaDecl["parameters"].(map[string]any)
+		require.True(t, ok)
+		schemaProps, ok := schemaParams["properties"].(map[string]any)
+		require.True(t, ok)
+		q, ok := schemaProps["q"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "STRING", q["type"])
+	})
 }
 
 // TestOAuthFailureNoFallback verifies that when OAuth token retrieval fails, an error is returned (not fallback to API key).

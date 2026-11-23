@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/samber/lo"
+	"github.com/tidwall/gjson"
 
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/internal/pkg/xurl"
@@ -178,7 +180,12 @@ func convertLLMToGeminiRequestWithConfig(chatReq *llm.Request, config *Config) *
 	// Convert ResponseFormat to ResponseSchema and ResponseMIMEType
 	if chatReq.ResponseFormat != nil {
 		if chatReq.ResponseFormat.Type == "json_schema" && len(chatReq.ResponseFormat.JSONSchema) > 0 {
-			gc.ResponseJsonSchema = extractJSONSchema(chatReq.ResponseFormat.JSONSchema)
+			// Gemini rejects a null, empty, or property-less empty object
+			// responseJsonSchema, so only forward a usable schema.
+			schema := extractJSONSchema(chatReq.ResponseFormat.JSONSchema)
+			if isUsableGeminiResponseSchema(schema) {
+				gc.ResponseJsonSchema = schema
+			}
 			gc.ResponseMIMEType = "application/json"
 			hasGenerationConfig = true
 		} else if chatReq.ResponseFormat.Type == "json_object" {
@@ -208,13 +215,11 @@ func convertLLMToGeminiRequestWithConfig(chatReq *llm.Request, config *Config) *
 					Description: tool.Function.Description,
 				}
 
-				if tool.Function.ParametersJsonSchema != nil {
-					// A literal JSON null is non-nil but must not be forwarded:
-					// Gemini validates parametersJsonSchema as a record.
-					fd.ParametersJsonSchema = llm.NormalizeEmptySchema(tool.Function.ParametersJsonSchema)
-				} else if tool.Function.Parameters != nil {
-					fd.ParametersJsonSchema = llm.NormalizeEmptySchema(tool.Function.Parameters)
-				}
+				// No-argument tools must still carry a record schema: Gemini and
+				// Antigravity reject a null parameters ("expected record,
+				// received null"). EffectiveParameters also picks up Gemini's
+				// newer parametersJsonSchema inbound format.
+				fd.ParametersJsonSchema = llm.NormalizeEmptySchema(tool.Function.EffectiveParameters())
 
 				functionDeclarations = append(functionDeclarations, fd)
 
@@ -897,16 +902,34 @@ func convertGeminiCandidateToLLMChoiceWithState(candidate *Candidate, isStream b
 	return choice, nextToolCallIndex
 }
 
-// extractJSONSchema extracts the inner "schema" field from an OpenAI json_schema object.
-// OpenAI format: {"name": "...", "schema": {...}, "strict": ...}
-// Gemini expects the schema content directly without the wrapper.
+// extractJSONSchema extracts the inner "schema" field from an OpenAI json_schema
+// object. OpenAI format: {"name": "...", "schema": {...}, "strict": ...}; Gemini
+// expects the schema content directly without the wrapper. A wrapper whose
+// "schema" is null yields "null" (never the wrapper itself), and a wrapper with
+// no "schema" key at all yields nil.
 func extractJSONSchema(raw json.RawMessage) json.RawMessage {
-	var wrapper struct {
-		Schema json.RawMessage `json:"schema,omitempty"`
+	if len(raw) == 0 {
+		return nil
 	}
-	if err := json.Unmarshal(raw, &wrapper); err == nil && len(wrapper.Schema) > 0 {
-		return wrapper.Schema
+	if schema := gjson.GetBytes(raw, "schema"); schema.Exists() {
+		return json.RawMessage(schema.Raw)
 	}
-
+	if gjson.GetBytes(raw, "name").Exists() &&
+		!gjson.GetBytes(raw, "type").Exists() &&
+		!gjson.GetBytes(raw, "properties").Exists() {
+		return nil
+	}
 	return raw
+}
+
+// isUsableGeminiResponseSchema reports whether an extracted schema can be sent
+// to Gemini. Null, empty, and property-less empty object shells are rejected
+// because Gemini refuses a responseJsonSchema whose object type carries no
+// properties ("Type.OBJECT cannot be empty").
+func isUsableGeminiResponseSchema(schema json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(schema)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("{}")) {
+		return false
+	}
+	return !llm.IsEmptyObjectSchema(schema)
 }

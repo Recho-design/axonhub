@@ -1735,3 +1735,107 @@ func TestOutboundTransformer_TransformResponse_WithTestData(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertFunctionToTool_ParametersNormalization(t *testing.T) {
+	schemaOnly := json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`)
+
+	tests := []struct {
+		name       string
+		fn         llm.Function
+		wantParams map[string]any
+	}{
+		{
+			name: "omitted parameters stay omitted for native round-trip",
+			fn:   llm.Function{Name: "plain"},
+		},
+		{
+			name: "omitted parameters with strict mode get strict empty schema",
+			fn:   llm.Function{Name: "plain_strict", Strict: lo.ToPtr(true)},
+			wantParams: map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{},
+				"required":             []any{},
+				"additionalProperties": false,
+			},
+		},
+		{
+			name: "explicit null parameters become empty object schema",
+			fn:   llm.Function{Name: "null_params", Parameters: json.RawMessage("null")},
+			wantParams: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
+			name: "empty object parameters become empty object schema",
+			fn:   llm.Function{Name: "empty_params", Parameters: json.RawMessage("{}")},
+			wantParams: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
+			name: "empty object parameters with strict mode get strict members",
+			fn:   llm.Function{Name: "empty_params_strict", Parameters: json.RawMessage("{}"), Strict: lo.ToPtr(true)},
+			wantParams: map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{},
+				"required":             []any{},
+				"additionalProperties": false,
+			},
+		},
+		{
+			name: "null parameters with strict mode get strict members",
+			fn:   llm.Function{Name: "null_params_strict", Parameters: json.RawMessage("null"), Strict: lo.ToPtr(true)},
+			wantParams: map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{},
+				"required":             []any{},
+				"additionalProperties": false,
+			},
+		},
+		{
+			name: "bare object type gains properties",
+			fn:   llm.Function{Name: "bare", Parameters: json.RawMessage(`{"type":"object"}`)},
+			wantParams: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
+			name: "parametersJsonSchema only is used for cross-protocol tools",
+			fn:   llm.Function{Name: "gemini_new", ParametersJsonSchema: schemaOnly},
+			wantParams: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"q": map[string]any{"type": "string"},
+				},
+				"required": []any{"q"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tool := convertFunctionToTool(llm.Tool{Type: "function", Function: tt.fn})
+
+			if tt.wantParams == nil {
+				require.Nil(t, tool.Parameters)
+				body, err := json.Marshal(tool)
+				require.NoError(t, err)
+				require.NotContains(t, string(body), `"parameters"`)
+				return
+			}
+
+			require.Equal(t, tt.wantParams, tool.Parameters)
+
+			body, err := json.Marshal(tool)
+			require.NoError(t, err)
+			require.Contains(t, string(body), `"parameters"`)
+
+			var decoded map[string]any
+			require.NoError(t, json.Unmarshal(body, &decoded))
+			require.Equal(t, tt.wantParams, decoded["parameters"])
+		})
+	}
+}

@@ -2854,3 +2854,338 @@ func TestWithPassThroughDelivery_AcknowledgesTransformedStream(t *testing.T) {
 	assert.True(t, transformed.acknowledged)
 	assert.True(t, stream.(streams.DeliveryAcknowledger).DeliveryAcknowledged())
 }
+
+// === sanitizeNullToolSchemasInRawBody tests ===
+
+func TestMergePassThroughBodyRepairsNullGeminiFunctionDeclarationParameters(t *testing.T) {
+	rawBody := []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"tools":[{"functionDeclarations":[{"name":"foo","parameters":null}]}]}`)
+
+	merged, err := mergePassThroughRequestBody(rawBody, llm.APIFormatGeminiContents, "gemini-2.5-pro")
+	require.NoError(t, err)
+
+	require.Equal(t, string(llm.EmptyObjectSchema), gjson.GetBytes(merged, "tools.0.functionDeclarations.0.parameters").Raw)
+	require.Equal(t, "foo", gjson.GetBytes(merged, "tools.0.functionDeclarations.0.name").String())
+	// Gemini carries the model in the URL, so the body must not gain one.
+	require.False(t, gjson.GetBytes(merged, "model").Exists())
+	require.Equal(t, "hi", gjson.GetBytes(merged, "contents.0.parts.0.text").String())
+}
+
+func TestMergePassThroughBodyRepairsNullGeminiSnakeCaseParametersJsonSchema(t *testing.T) {
+	rawBody := []byte(`{"tools":[{"function_declarations":[{"name":"bar","parametersJsonSchema":null}]}]}`)
+
+	merged, err := mergePassThroughRequestBody(rawBody, llm.APIFormatGeminiContents, "gemini-2.5-pro")
+	require.NoError(t, err)
+
+	require.Equal(t, string(llm.EmptyObjectSchema), gjson.GetBytes(merged, "tools.0.function_declarations.0.parametersJsonSchema").Raw)
+	require.False(t, gjson.GetBytes(merged, "tools.0.function_declarations.0.parameters").Exists())
+}
+
+func TestMergePassThroughBodyDropsNullGeminiParametersWhenJsonSchemaPresent(t *testing.T) {
+	rawBody := []byte(`{"tools":[{"functionDeclarations":[{"name":"foo","parameters":null,"parametersJsonSchema":{"type":"object","properties":{"a":{"type":"string"}}}}]}]}`)
+
+	merged, err := mergePassThroughRequestBody(rawBody, llm.APIFormatGeminiContents, "gemini-2.5-pro")
+	require.NoError(t, err)
+
+	// parameters and parametersJsonSchema are oneof: the null side must be dropped and
+	// the populated schema preserved byte for byte.
+	require.False(t, gjson.GetBytes(merged, "tools.0.functionDeclarations.0.parameters").Exists())
+	require.Equal(t,
+		`{"type":"object","properties":{"a":{"type":"string"}}}`,
+		gjson.GetBytes(merged, "tools.0.functionDeclarations.0.parametersJsonSchema").Raw,
+	)
+}
+
+func TestMergePassThroughBodyDropsNullGeminiJsonSchemaWhenParametersPresent(t *testing.T) {
+	rawBody := []byte(`{"tools":[{"functionDeclarations":[{"name":"foo","parameters":{"type":"object"},"parametersJsonSchema":null}]}]}`)
+
+	merged, err := mergePassThroughRequestBody(rawBody, llm.APIFormatGeminiContents, "gemini-2.5-pro")
+	require.NoError(t, err)
+
+	require.False(t, gjson.GetBytes(merged, "tools.0.functionDeclarations.0.parametersJsonSchema").Exists())
+	require.Equal(t, `{"type":"object"}`, gjson.GetBytes(merged, "tools.0.functionDeclarations.0.parameters").Raw)
+}
+
+func TestMergePassThroughBodyReplacesGeminiParametersWhenBothNull(t *testing.T) {
+	rawBody := []byte(`{"tools":[{"functionDeclarations":[{"name":"foo","parameters":null,"parametersJsonSchema":null}]}]}`)
+
+	merged, err := mergePassThroughRequestBody(rawBody, llm.APIFormatGeminiContents, "gemini-2.5-pro")
+	require.NoError(t, err)
+
+	require.False(t, gjson.GetBytes(merged, "tools.0.functionDeclarations.0.parametersJsonSchema").Exists())
+	require.Equal(t, string(llm.EmptyObjectSchema), gjson.GetBytes(merged, "tools.0.functionDeclarations.0.parameters").Raw)
+}
+
+func TestMergePassThroughBodyLeavesNormalGeminiBodyUntouched(t *testing.T) {
+	rawBody := []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"tools":[{"functionDeclarations":[{"name":"foo","description":"d","parameters":{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}}]},{"googleSearch":{}}],"generationConfig":{"temperature":0.2}}`)
+
+	merged, err := mergePassThroughRequestBody(rawBody, llm.APIFormatGeminiContents, "gemini-2.5-pro")
+	require.NoError(t, err)
+
+	// No null schema target: the replayed bytes must be identical to protect prompt cache.
+	require.Equal(t, string(rawBody), string(merged))
+}
+
+func TestMergePassThroughBodyRepairsNullOpenAIChatToolParameters(t *testing.T) {
+	tests := []struct {
+		name    string
+		rawBody string
+		want    string
+	}{
+		{
+			name:    "non-strict",
+			rawBody: `{"model":"client-model","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"foo","strict":false,"parameters":null}}]}`,
+			want:    string(llm.EmptyObjectSchema),
+		},
+		{
+			name:    "strict",
+			rawBody: `{"model":"client-model","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"foo","strict":true,"parameters":null}}]}`,
+			want:    string(llm.StrictEmptyObjectSchema),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			merged, err := mergePassThroughRequestBody([]byte(tt.rawBody), llm.APIFormatOpenAIChatCompletion, "provider-model")
+			require.NoError(t, err)
+
+			require.Equal(t, tt.want, gjson.GetBytes(merged, "tools.0.function.parameters").Raw)
+			require.Equal(t, "foo", gjson.GetBytes(merged, "tools.0.function.name").String())
+			require.Equal(t, "provider-model", gjson.GetBytes(merged, "model").String())
+		})
+	}
+}
+
+func TestMergePassThroughBodyRepairsNullLegacyFunctionsParameters(t *testing.T) {
+	rawBody := []byte(`{"model":"client-model","prompt":"hi","functions":[{"name":"foo","parameters":null}]}`)
+
+	merged, err := mergePassThroughRequestBody(rawBody, llm.APIFormatOpenAIChatCompletion, "provider-model")
+	require.NoError(t, err)
+
+	require.Equal(t, string(llm.EmptyObjectSchema), gjson.GetBytes(merged, "functions.0.parameters").Raw)
+}
+
+func TestMergePassThroughBodyRepairsNullResponsesToolParameters(t *testing.T) {
+	rawBody := []byte(`{"model":"client-model","input":"hi","tools":[{"type":"function","name":"foo","parameters":null,"strict":true},{"type":"namespace","name":"ns","tools":[{"type":"function","name":"bar","parameters":null}]}]}`)
+
+	merged, err := mergePassThroughRequestBody(rawBody, llm.APIFormatOpenAIResponse, "provider-model")
+	require.NoError(t, err)
+
+	require.Equal(t, string(llm.StrictEmptyObjectSchema), gjson.GetBytes(merged, "tools.0.parameters").Raw)
+	require.Equal(t, string(llm.EmptyObjectSchema), gjson.GetBytes(merged, "tools.1.tools.0.parameters").Raw)
+	require.Equal(t, "provider-model", gjson.GetBytes(merged, "model").String())
+}
+
+func TestMergePassThroughBodyRepairsNullAnthropicInputSchema(t *testing.T) {
+	rawBody := []byte(`{"model":"client-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}],"tools":[{"name":"foo","strict":true,"input_schema":null},{"name":"bar","input_schema":null}]}`)
+
+	merged, err := mergePassThroughRequestBody(rawBody, llm.APIFormatAnthropicMessage, "provider-model")
+	require.NoError(t, err)
+
+	require.Equal(t, string(llm.StrictEmptyObjectSchema), gjson.GetBytes(merged, "tools.0.input_schema").Raw)
+	require.Equal(t, string(llm.EmptyObjectSchema), gjson.GetBytes(merged, "tools.1.input_schema").Raw)
+}
+
+func TestSanitizeNullToolSchemasInRawBodyLeavesPopulatedSchemasUntouched(t *testing.T) {
+	tests := []struct {
+		name      string
+		apiFormat llm.APIFormat
+		rawBody   string
+	}{
+		{
+			name:      "openai chat",
+			apiFormat: llm.APIFormatOpenAIChatCompletion,
+			rawBody:   `{"model":"gpt-4o","tools":[{"type":"function","function":{"name":"foo","strict":true,"parameters":{"type":"object","properties":{}}}}]}`,
+		},
+		{
+			name:      "openai responses",
+			apiFormat: llm.APIFormatOpenAIResponse,
+			rawBody:   `{"model":"gpt-4o","tools":[{"type":"function","name":"foo","parameters":{"type":"object"}}]}`,
+		},
+		{
+			name:      "anthropic",
+			apiFormat: llm.APIFormatAnthropicMessage,
+			rawBody:   `{"model":"claude","tools":[{"name":"foo","input_schema":{"type":"object"}}]}`,
+		},
+		{
+			name:      "gemini",
+			apiFormat: llm.APIFormatGeminiContents,
+			rawBody:   `{"tools":[{"functionDeclarations":[{"name":"foo","parametersJsonSchema":{"type":"object"}}]}]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sanitized := sanitizeNullToolSchemasInRawBody([]byte(tt.rawBody), tt.apiFormat)
+			assert.Equal(t, tt.rawBody, string(sanitized))
+		})
+	}
+}
+
+func TestOverrideRequestBodyRepairsNullToolSchema(t *testing.T) {
+	ctx := context.Background()
+	channel := &biz.Channel{
+		Channel: &ent.Channel{
+			ID:   1,
+			Name: "override-null-tool-schema",
+			Settings: &objects.ChannelSettings{
+				BodyOverrideOperations: []objects.OverrideOperation{{
+					Op:    objects.OverrideOpSet,
+					Path:  "tools.0.function.parameters",
+					Value: "null",
+				}},
+			},
+		},
+		Outbound: &mockTransformer{},
+	}
+	outbound := &PersistentOutboundTransformer{
+		wrapped: &mockTransformer{},
+		state: &PersistenceState{
+			CurrentCandidate: &ChannelModelsCandidate{Channel: channel},
+			LlmRequest: &llm.Request{
+				Model:     "gpt-4",
+				APIFormat: llm.APIFormatOpenAIChatCompletion,
+			},
+		},
+	}
+
+	request := &httpclient.Request{
+		Body: []byte(`{"model":"gpt-4","tools":[{"type":"function","function":{"name":"foo","parameters":{"type":"object"}}}]}`),
+	}
+
+	processed, err := applyOverrideRequestBody(outbound).OnOutboundRawRequest(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, string(llm.EmptyObjectSchema), gjson.GetBytes(processed.Body, "tools.0.function.parameters").Raw)
+}
+
+// geminiInputSchemaCount counts how many Gemini input schema keys under declPath hold a
+// non-null value. Gemini's oneof requires this to be at most one.
+func geminiInputSchemaCount(body []byte, declPath string) int {
+	count := 0
+
+	for _, key := range []string{"parameters", "parametersJsonSchema", "parameters_json_schema"} {
+		result := gjson.GetBytes(body, declPath+"."+key)
+		if result.Exists() && result.Type != gjson.Null {
+			count++
+		}
+	}
+
+	return count
+}
+
+func TestSanitizeGeminiFunctionDeclarationCollapsesOneof(t *testing.T) {
+	const declPath = "tools.0.functionDeclarations.0"
+
+	tests := []struct {
+		name       string
+		rawBody    string
+		wantKey    string
+		wantSchema string
+	}{
+		{
+			name:       "both camel and snake json schema null",
+			rawBody:    `{"tools":[{"functionDeclarations":[{"name":"foo","parametersJsonSchema":null,"parameters_json_schema":null}]}]}`,
+			wantKey:    "parametersJsonSchema",
+			wantSchema: string(llm.EmptyObjectSchema),
+		},
+		{
+			name:       "parameters and json schema null with a valid snake schema",
+			rawBody:    `{"tools":[{"functionDeclarations":[{"name":"foo","parameters":null,"parametersJsonSchema":null,"parameters_json_schema":{"type":"object","properties":{"q":{"type":"string"}}}}]}]}`,
+			wantKey:    "parameters_json_schema",
+			wantSchema: `{"type":"object","properties":{"q":{"type":"string"}}}`,
+		},
+		{
+			name:       "all three keys null",
+			rawBody:    `{"tools":[{"functionDeclarations":[{"name":"foo","parameters":null,"parametersJsonSchema":null,"parameters_json_schema":null}]}]}`,
+			wantKey:    "parameters",
+			wantSchema: string(llm.EmptyObjectSchema),
+		},
+		{
+			name:       "already one valid schema alongside both null schema keys",
+			rawBody:    `{"tools":[{"functionDeclarations":[{"name":"foo","parameters":{"type":"object"},"parametersJsonSchema":null,"parameters_json_schema":null}]}]}`,
+			wantKey:    "parameters",
+			wantSchema: `{"type":"object"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sanitized := sanitizeNullToolSchemasInRawBody([]byte(tt.rawBody), llm.APIFormatGeminiContents)
+			require.True(t, gjson.ValidBytes(sanitized))
+
+			// Gemini's oneof must never see two populated input schema keys.
+			require.Equal(t, 1, geminiInputSchemaCount(sanitized, declPath))
+			require.Equal(t, tt.wantSchema, gjson.GetBytes(sanitized, declPath+"."+tt.wantKey).Raw)
+		})
+	}
+}
+
+func TestSanitizeGeminiDropsNullResponseSchemas(t *testing.T) {
+	rawBody := []byte(`{"tools":[{"functionDeclarations":[{"name":"foo","parameters":null,"response":null,"responseJsonSchema":null,"response_json_schema":null}]}],"generationConfig":{"temperature":0.2,"responseSchema":null,"response_schema":null,"responseJsonSchema":null,"response_json_schema":null}}`)
+
+	sanitized := sanitizeNullToolSchemasInRawBody(rawBody, llm.APIFormatGeminiContents)
+	require.True(t, gjson.ValidBytes(sanitized))
+
+	for _, key := range []string{"response", "responseJsonSchema", "response_json_schema"} {
+		require.False(t, gjson.GetBytes(sanitized, "tools.0.functionDeclarations.0."+key).Exists(),
+			"null function output schema %q should be deleted", key)
+	}
+
+	for _, key := range []string{"responseSchema", "response_schema", "responseJsonSchema", "response_json_schema"} {
+		require.False(t, gjson.GetBytes(sanitized, "generationConfig."+key).Exists(),
+			"null generationConfig response schema %q should be deleted", key)
+	}
+
+	require.Equal(t, string(llm.EmptyObjectSchema), gjson.GetBytes(sanitized, "tools.0.functionDeclarations.0.parameters").Raw)
+	require.InDelta(t, 0.2, gjson.GetBytes(sanitized, "generationConfig.temperature").Float(), 1e-9)
+}
+
+func TestOverrideRequestBodyRepairsNullGeminiParametersInAntigravityEnvelope(t *testing.T) {
+	ctx := context.Background()
+	channel := &biz.Channel{
+		Channel: &ent.Channel{
+			ID:   1,
+			Name: "override-antigravity-envelope",
+			Settings: &objects.ChannelSettings{
+				BodyOverrideOperations: []objects.OverrideOperation{{
+					Op:    objects.OverrideOpSet,
+					Path:  "request.generationConfig.temperature",
+					Value: "0.7",
+				}},
+			},
+		},
+		Outbound: &mockTransformer{},
+	}
+	outbound := &PersistentOutboundTransformer{
+		wrapped: &mockTransformer{},
+		state: &PersistenceState{
+			CurrentCandidate: &ChannelModelsCandidate{Channel: channel},
+			LlmRequest: &llm.Request{
+				Model:     "gemini-2.5-pro",
+				APIFormat: llm.APIFormatGeminiContents,
+			},
+		},
+	}
+
+	request := &httpclient.Request{
+		APIFormat: string(llm.APIFormatGeminiContents),
+		Body:      []byte(`{"project":"p","model":"m","request":{"tools":[{"functionDeclarations":[{"name":"foo","parameters":null}]}]}}`),
+	}
+
+	processed, err := applyOverrideRequestBody(outbound).OnOutboundRawRequest(ctx, request)
+	require.NoError(t, err)
+	require.True(t, gjson.ValidBytes(processed.Body))
+	require.Equal(t,
+		string(llm.EmptyObjectSchema),
+		gjson.GetBytes(processed.Body, "request.tools.0.functionDeclarations.0.parameters").Raw,
+	)
+	require.InDelta(t, 0.7, gjson.GetBytes(processed.Body, "request.generationConfig.temperature").Float(), 1e-9)
+}
+
+func TestSanitizeOllamaChatRepairsNullToolParameters(t *testing.T) {
+	rawBody := []byte(`{"model":"llama3","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"foo","strict":true,"parameters":null}}]}`)
+
+	sanitized := sanitizeNullToolSchemasInRawBody(rawBody, llm.APIFormatOllamaChat)
+	require.True(t, gjson.ValidBytes(sanitized))
+	require.Equal(t, string(llm.StrictEmptyObjectSchema), gjson.GetBytes(sanitized, "tools.0.function.parameters").Raw)
+	require.Equal(t, "foo", gjson.GetBytes(sanitized, "tools.0.function.name").String())
+}

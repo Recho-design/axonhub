@@ -269,6 +269,31 @@ type FunctionDeclaration struct {
 	ResponseJsonSchema json.RawMessage `json:"responseJsonSchema,omitempty"`
 }
 
+// UnmarshalJSON accepts parameters_json_schema / response_json_schema as
+// fallbacks for the camelCase fields.
+func (f *FunctionDeclaration) UnmarshalJSON(data []byte) error {
+	type declarationAlias FunctionDeclaration
+
+	var decoded struct {
+		declarationAlias
+		ParametersJsonSchemaSnake json.RawMessage `json:"parameters_json_schema"`
+		ResponseJsonSchemaSnake   json.RawMessage `json:"response_json_schema"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	*f = FunctionDeclaration(decoded.declarationAlias)
+	if len(f.ParametersJsonSchema) == 0 {
+		f.ParametersJsonSchema = decoded.ParametersJsonSchemaSnake
+	}
+	if len(f.ResponseJsonSchema) == 0 {
+		f.ResponseJsonSchema = decoded.ResponseJsonSchemaSnake
+	}
+
+	return nil
+}
+
 // CodeExecution enables code execution.
 type CodeExecution struct{}
 
@@ -348,6 +373,31 @@ type GenerationConfig struct {
 	ThinkingConfig *ThinkingConfig `json:"thinkingConfig,omitempty"`
 
 	ImageConfig *ImageConfig `json:"imageConfig,omitempty"`
+}
+
+// UnmarshalJSON accepts response_schema / response_json_schema as fallbacks for
+// the camelCase fields.
+func (g *GenerationConfig) UnmarshalJSON(data []byte) error {
+	type generationConfigAlias GenerationConfig
+
+	var decoded struct {
+		generationConfigAlias
+		ResponseSchemaSnake     json.RawMessage `json:"response_schema"`
+		ResponseJsonSchemaSnake json.RawMessage `json:"response_json_schema"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	*g = GenerationConfig(decoded.generationConfigAlias)
+	if len(g.ResponseSchema) == 0 {
+		g.ResponseSchema = decoded.ResponseSchemaSnake
+	}
+	if len(g.ResponseJsonSchema) == 0 {
+		g.ResponseJsonSchema = decoded.ResponseJsonSchemaSnake
+	}
+
+	return nil
 }
 
 type ImageConfig struct {

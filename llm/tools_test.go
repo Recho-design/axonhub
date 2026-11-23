@@ -304,3 +304,168 @@ func TestNormalizeFunctionParameters(t *testing.T) {
 		})
 	}
 }
+
+func TestFunctionEffectiveParameters(t *testing.T) {
+	valid := json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`)
+	otherValid := json.RawMessage(`{"type":"object","properties":{"x":{"type":"number"}}}`)
+
+	tests := []struct {
+		name string
+		item llm.Function
+		want json.RawMessage
+	}{
+		{
+			name: "both unset yields nil",
+			item: llm.Function{},
+			want: nil,
+		},
+		{
+			name: "legacy parameters only",
+			item: llm.Function{Parameters: valid},
+			want: valid,
+		},
+		{
+			name: "json schema only",
+			item: llm.Function{ParametersJsonSchema: valid},
+			want: valid,
+		},
+		{
+			name: "non-empty json schema wins over parameters",
+			item: llm.Function{Parameters: otherValid, ParametersJsonSchema: valid},
+			want: valid,
+		},
+		{
+			name: "empty json schema defers to usable parameters",
+			item: llm.Function{ParametersJsonSchema: json.RawMessage("{}"), Parameters: valid},
+			want: valid,
+		},
+		{
+			name: "empty json schema with null parameters stays empty object",
+			item: llm.Function{ParametersJsonSchema: json.RawMessage("{}"), Parameters: json.RawMessage("null")},
+			want: json.RawMessage("{}"),
+		},
+		{
+			name: "null json schema defers to usable parameters",
+			item: llm.Function{ParametersJsonSchema: json.RawMessage("null"), Parameters: valid},
+			want: valid,
+		},
+		{
+			name: "explicit null json schema is preserved when parameters unset",
+			item: llm.Function{ParametersJsonSchema: json.RawMessage("null")},
+			want: json.RawMessage("null"),
+		},
+		{
+			name: "null parameters alone are returned as-is",
+			item: llm.Function{Parameters: json.RawMessage("null")},
+			want: json.RawMessage("null"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.item.EffectiveParameters()
+			require.Equal(t, []byte(tt.want), []byte(got))
+		})
+	}
+}
+
+func TestNormalizeEmptySchema_EmptyObjectShells(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  json.RawMessage
+		strict *bool
+		want   json.RawMessage
+	}{
+		{
+			name:  "empty object literal becomes empty object schema",
+			input: json.RawMessage("{}"),
+			want:  llm.EmptyObjectSchema,
+		},
+		{
+			name:  "bare object type gains empty properties",
+			input: json.RawMessage(`{"type":"object"}`),
+			want:  json.RawMessage(`{"type":"object","properties":{}}`),
+		},
+		{
+			name:  "null properties with no metadata collapses to template",
+			input: json.RawMessage(`{"type":"object","properties":null}`),
+			want:  llm.EmptyObjectSchema,
+		},
+		{
+			name:  "empty required and false additionalProperties are preserved",
+			input: json.RawMessage(`{"type":"object","required":[],"additionalProperties":false}`),
+			want:  json.RawMessage(`{"type":"object","required":[],"additionalProperties":false,"properties":{}}`),
+		},
+		{
+			name:  "decorated shell keeps description and gains properties",
+			input: json.RawMessage(`{"type":"object","description":"no args"}`),
+			want:  json.RawMessage(`{"type":"object","properties":{},"description":"no args"}`),
+		},
+		{
+			name:   "decorated strict shell gains strict members",
+			input:  json.RawMessage(`{"type":"object","description":"no args"}`),
+			strict: lo.ToPtr(true),
+			want:   json.RawMessage(`{"type":"object","properties":{},"required":[],"additionalProperties":false,"description":"no args"}`),
+		},
+		{
+			name:   "bare strict shell becomes strict template",
+			input:  json.RawMessage(`{"type":"object"}`),
+			strict: lo.ToPtr(true),
+			want:   llm.StrictEmptyObjectSchema,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.JSONEq(t, string(tt.want), string(llm.NormalizeFunctionParameters(tt.input, tt.strict)))
+		})
+	}
+}
+
+func TestNormalizeFunctionParameters_PreservesComplexSchemas(t *testing.T) {
+	// These schemas carry real constraints. Rewriting them would change the
+	// contract the model sees, so they must pass through byte-for-byte.
+	inputs := []json.RawMessage{
+		json.RawMessage(`{"type":"object","additionalProperties":{"type":"string"}}`),
+		json.RawMessage(`{"type":"object","anyOf":[{"type":"object","properties":{"a":{"type":"string"}}}]}`),
+		json.RawMessage(`{"type":"object","oneOf":[{"type":"object","properties":{"a":{"type":"string"}}}]}`),
+		json.RawMessage(`{"type":"object","allOf":[{"type":"object","properties":{"a":{"type":"string"}}}]}`),
+		json.RawMessage(`{"type":"object","patternProperties":{"^x-":{"type":"string"}}}`),
+		json.RawMessage(`{"type":"object","required":["x"],"properties":{"x":{"type":"string"}}}`),
+		json.RawMessage(`{"type":"object","additionalProperties":true}`),
+		json.RawMessage(`{"type":"string"}`),
+		json.RawMessage(`{"type":["object","null"]}`),
+		json.RawMessage(`{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}`),
+	}
+
+	for _, input := range inputs {
+		t.Run(string(input), func(t *testing.T) {
+			for _, strict := range []*bool{nil, lo.ToPtr(false), lo.ToPtr(true)} {
+				got := llm.NormalizeFunctionParameters(input, strict)
+				require.Equal(t, []byte(input), []byte(got), "schema must not be rewritten")
+			}
+			require.Equal(t, []byte(input), []byte(llm.NormalizeEmptySchema(input)))
+		})
+	}
+}
+
+func TestNormalizeEmptySchema_ReturnsIndependentClones(t *testing.T) {
+	plain := llm.NormalizeEmptySchema(nil)
+	require.JSONEq(t, string(llm.EmptyObjectSchema), string(plain))
+
+	plain[0] = 'X'
+	require.JSONEq(t, `{"type":"object","properties":{}}`, string(llm.EmptyObjectSchema),
+		"mutating the returned schema must not corrupt the shared template")
+
+	strict := llm.NormalizeFunctionParameters(nil, lo.ToPtr(true))
+	require.JSONEq(t, string(llm.StrictEmptyObjectSchema), string(strict))
+
+	strict[0] = 'X'
+	require.JSONEq(t, `{"type":"object","properties":{},"required":[],"additionalProperties":false}`,
+		string(llm.StrictEmptyObjectSchema),
+		"mutating the returned strict schema must not corrupt the shared template")
+
+	again := llm.NormalizeEmptySchema(json.RawMessage("{}"))
+	require.JSONEq(t, `{"type":"object","properties":{}}`, string(llm.EmptyObjectSchema))
+	require.JSONEq(t, `{"type":"object","properties":{}}`, string(again))
+}

@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 
@@ -95,10 +96,12 @@ func convertGeminiToLLMRequest(geminiReq *GenerateContentRequest) (*llm.Request,
 			chatReq.Modalities = convertGeminiModalitiesToLLM(gc.ResponseModalities)
 		}
 
-		// Convert ResponseSchema/ResponseJsonSchema to ResponseFormat json_schema
-		if len(gc.ResponseJsonSchema) > 0 {
+		// Convert ResponseSchema/ResponseJsonSchema to ResponseFormat json_schema.
+		// A literal null or empty object is not a usable schema: len() alone
+		// treats "null" as present and would block a valid ResponseSchema.
+		if isUsableGeminiSchema(gc.ResponseJsonSchema) {
 			chatReq.ResponseFormat = geminiJSONSchemaResponseFormat(gc.ResponseJsonSchema)
-		} else if len(gc.ResponseSchema) > 0 {
+		} else if isUsableGeminiSchema(gc.ResponseSchema) {
 			chatReq.ResponseFormat = geminiJSONSchemaResponseFormat(gc.ResponseSchema)
 		} else if gc.ResponseMIMEType == "application/json" {
 			// If only ResponseMIMEType is set to JSON, use json_object
@@ -144,12 +147,18 @@ func convertGeminiToLLMRequest(geminiReq *GenerateContentRequest) (*llm.Request,
 				for _, fd := range tool.FunctionDeclarations {
 					// The gemini sdk use UPPER case for type, but the unified format use lower case.
 					transform := func(schema json.RawMessage) json.RawMessage {
-						if schema == nil {
+						trimmed := bytes.TrimSpace(schema)
+						if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+							// Passing "null" into jsonschema decoding produces a
+							// boolean false schema ({"not":{}}); treat it as absent.
 							return nil
 						}
 
 						transformed, err := xjson.Transform(schema, func(s *jsonschema.Schema) {
 							s.Type = strings.ToLower(s.Type)
+							for i, t := range s.Types {
+								s.Types[i] = strings.ToLower(t)
+							}
 						})
 						if err != nil {
 							return schema // fallback to original on error
@@ -158,14 +167,13 @@ func convertGeminiToLLMRequest(geminiReq *GenerateContentRequest) (*llm.Request,
 						return transformed
 					}
 
-					// Determine which format was used and preserve it
+					// Determine which format was used and preserve it. A client may
+					// send "parameters": null alongside a usable
+					// "parametersJsonSchema", so fall back when transform drops it.
 					var parameters, parametersJsonSchema json.RawMessage
 
-					if fd.Parameters != nil {
-						// Old format
-						parameters = transform(fd.Parameters)
-					} else if fd.ParametersJsonSchema != nil {
-						// New format
+					parameters = transform(fd.Parameters)
+					if parameters == nil {
 						parametersJsonSchema = transform(fd.ParametersJsonSchema)
 					}
 
@@ -307,6 +315,14 @@ func convertGeminiContentToLLMMessages(content *Content, previousContents []*Con
 	}
 
 	return messages, nil
+}
+
+// isUsableGeminiSchema reports whether a raw Gemini schema has content worth
+// forwarding: not nil, not blank, not the literal JSON null, and not the empty
+// object literal.
+func isUsableGeminiSchema(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) && !bytes.Equal(trimmed, []byte("{}"))
 }
 
 func geminiJSONSchemaResponseFormat(schema json.RawMessage) *llm.ResponseFormat {

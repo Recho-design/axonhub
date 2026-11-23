@@ -230,9 +230,26 @@ func applyOverrideRequestBody(outbound *PersistentOutboundTransformer) pipeline.
 		}
 
 		request.Body = body
+		// Override templates or earlier stages may have written an explicit null tool
+		// schema; repair it in place before the request leaves for the provider.
+		request.Body = sanitizeNullToolSchemasInRawBody(request.Body, outbound.currentAPIFormat(request))
 
 		return request, nil
 	})
+}
+
+// currentAPIFormat returns the outbound request's API format, falling back to the parsed
+// LLM request when the request itself does not carry one.
+func (p *PersistentOutboundTransformer) currentAPIFormat(request *httpclient.Request) llm.APIFormat {
+	if request != nil && request.APIFormat != "" {
+		return llm.APIFormat(request.APIFormat)
+	}
+
+	if p != nil && p.state != nil && p.state.LlmRequest != nil {
+		return p.state.LlmRequest.APIFormat
+	}
+
+	return ""
 }
 
 // requestContentType returns the effective outbound Content-Type, preferring the

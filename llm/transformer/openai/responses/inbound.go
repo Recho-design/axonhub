@@ -895,9 +895,16 @@ func convertToolsToLLM(tools []Tool) ([]llm.Tool, error) {
 	for _, tool := range tools {
 		switch tool.Type {
 		case "function":
-			params, err := json.Marshal(tool.Parameters)
-			if err != nil {
-				return nil, fmt.Errorf("failed to marshal function parameters: %w", err)
+			// Marshal only when the client actually provided parameters: a nil
+			// map would otherwise marshal to json.RawMessage("null") and force
+			// downstream protocols to see an explicit null.
+			var params json.RawMessage
+			if tool.Parameters != nil {
+				raw, err := json.Marshal(tool.Parameters)
+				if err != nil {
+					return nil, fmt.Errorf("failed to marshal function parameters: %w", err)
+				}
+				params = raw
 			}
 
 			result = append(result, llm.Tool{
@@ -972,9 +979,13 @@ func convertToolsToLLM(tools []Tool) ([]llm.Tool, error) {
 					continue
 				}
 
-				params, err := json.Marshal(subTool.Parameters)
-				if err != nil {
-					return nil, fmt.Errorf("failed to marshal namespace tool parameters: %w", err)
+				var params json.RawMessage
+				if subTool.Parameters != nil {
+					raw, err := json.Marshal(subTool.Parameters)
+					if err != nil {
+						return nil, fmt.Errorf("failed to marshal namespace tool parameters: %w", err)
+					}
+					params = raw
 				}
 
 				result = append(result, llm.Tool{

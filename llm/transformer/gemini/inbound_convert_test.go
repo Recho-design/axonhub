@@ -3101,3 +3101,64 @@ func TestConvertLLMToGeminiResponse_GroundingMetadata_Additional(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertGeminiToLLMRequest_NullToolParameters(t *testing.T) {
+	jsonSchema := json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`)
+
+	tests := []struct {
+		name string
+		fd   *FunctionDeclaration
+		want json.RawMessage
+	}{
+		{
+			name: "null parameters stays absent instead of a false schema",
+			fd:   &FunctionDeclaration{Name: "noop", Parameters: json.RawMessage("null")},
+			want: nil,
+		},
+		{
+			name: "null parameters falls back to usable parametersJsonSchema",
+			fd: &FunctionDeclaration{
+				Name:                 "fallback",
+				Parameters:           json.RawMessage("null"),
+				ParametersJsonSchema: jsonSchema,
+			},
+			want: jsonSchema,
+		},
+		{
+			name: "blank parameters falls back to usable parametersJsonSchema",
+			fd: &FunctionDeclaration{
+				Name:                 "blank",
+				Parameters:           json.RawMessage("   "),
+				ParametersJsonSchema: jsonSchema,
+			},
+			want: jsonSchema,
+		},
+		{
+			name: "parametersJsonSchema alone is preserved",
+			fd:   &FunctionDeclaration{Name: "schema_only", ParametersJsonSchema: jsonSchema},
+			want: jsonSchema,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := convertGeminiToLLMRequest(&GenerateContentRequest{
+				Contents: []*Content{{Role: "user", Parts: []*Part{{Text: "hi"}}}},
+				Tools:    []*Tool{{FunctionDeclarations: []*FunctionDeclaration{tt.fd}}},
+			})
+			require.NoError(t, err)
+			require.Len(t, result.Tools, 1)
+
+			fn := result.Tools[0].Function
+			require.Nil(t, fn.Parameters, "old-format parameters must stay absent")
+
+			if tt.want == nil {
+				require.Nil(t, fn.ParametersJsonSchema)
+			} else {
+				require.JSONEq(t, string(tt.want), string(fn.ParametersJsonSchema))
+			}
+			// A JSON null schema decoded by jsonschema-go becomes a false schema.
+			require.NotContains(t, string(fn.ParametersJsonSchema), `"not"`)
+		})
+	}
+}
