@@ -14,6 +14,7 @@
 //	只有目标字段存在且值为 JSON null 时才改写字节流，其余情况必须原样返回，避免破坏上游 Prompt Cache。
 //	Gemini 的 parameters、parametersJsonSchema 与 parameters_json_schema 是 oneof 互斥关系，修补后只能保留唯一一个非 null 字段。
 //	Antigravity 把整个请求包在顶层 request 信封里，Gemini 修补必须同时覆盖 request.tools 与 request.generationConfig。
+
 package orchestrator
 
 import (
