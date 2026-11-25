@@ -1345,15 +1345,6 @@ func TestConvertToolsAnthropic_NormalizesEmptyAndCrossProtocolSchemas(t *testing
 			fn:   llm.Function{Name: "strict_empty", Parameters: json.RawMessage("{}"), Strict: lo.ToPtr(true)},
 			want: llm.StrictEmptyObjectSchema,
 		},
-		{
-			name: "strict decorated shell keeps description and only fills structure",
-			fn: llm.Function{
-				Name:       "strict_decorated",
-				Parameters: json.RawMessage(`{"type":"object","description":"no args"}`),
-				Strict:     lo.ToPtr(true),
-			},
-			want: json.RawMessage(`{"type":"object","properties":{},"required":[],"additionalProperties":false,"description":"no args"}`),
-		},
 	}
 
 	for _, tt := range tests {

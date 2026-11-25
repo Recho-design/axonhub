@@ -2,6 +2,10 @@
 
 2026-11-23
 
+> **已被 [2026-11-25-empty-tool-placeholder-injection.md](2026-11-25-empty-tool-placeholder-injection.md) 取代。**
+> 本文描述的直通 null 修补（`sanitizeNullToolSchemasInRawBody`）、空壳装饰机和
+> Responses namespace 原始碎片清洗已因对真实问题无效而删除；保留此文件仅为记录当时的取舍。
+
 ## 背景
 
 上游 Gemini 反代（oai-proxy）返回 400：

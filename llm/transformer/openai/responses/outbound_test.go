@@ -1839,3 +1839,22 @@ func TestConvertFunctionToTool_ParametersNormalization(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertFunctionToTool_DoesNotForcePropertiesOnComplexObject(t *testing.T) {
+	for _, params := range []json.RawMessage{
+		json.RawMessage(`{"type":"object","additionalProperties":{"type":"string"}}`),
+		json.RawMessage(`{"type":"object","anyOf":[{"type":"object","properties":{"a":{"type":"string"}}}]}`),
+		json.RawMessage(`{"type":"object","oneOf":[{"type":"object","properties":{"a":{"type":"string"}}}]}`),
+		json.RawMessage(`{"type":"object","allOf":[{"type":"object","properties":{"a":{"type":"string"}}}]}`),
+	} {
+		t.Run(string(params), func(t *testing.T) {
+			tool := convertFunctionToTool(llm.Tool{
+				Type:     "function",
+				Function: llm.Function{Name: "f", Parameters: params},
+			})
+			require.NotNil(t, tool.Parameters)
+			require.NotContains(t, tool.Parameters, "properties",
+				"a constraint-bearing object schema must not gain properties:{}")
+		})
+	}
+}

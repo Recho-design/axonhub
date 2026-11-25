@@ -1737,3 +1737,39 @@ func TestConvertAssistantMessage_PreservesMultipleReasoningSignaturesBeforeToolC
 	require.Equal(t, []ReasoningSummary{{Type: "summary_text", Text: "second"}}, items[1].Summary)
 	require.Equal(t, "function_call", items[2].Type)
 }
+
+func TestConvertToTextOptions_NullSchemaIsOmitted(t *testing.T) {
+	for _, wrapped := range []string{
+		`{"name":"out","schema":null}`,
+		`{"name":"out"}`,
+	} {
+		t.Run(wrapped, func(t *testing.T) {
+			chatReq := &llm.Request{
+				ResponseFormat: &llm.ResponseFormat{
+					Type:       "json_schema",
+					JSONSchema: json.RawMessage(wrapped),
+				},
+			}
+			opts := convertToTextOptions(chatReq)
+			require.NotNil(t, opts)
+			require.NotNil(t, opts.Format)
+			require.Nil(t, opts.Format.Schema)
+
+			body, err := json.Marshal(opts)
+			require.NoError(t, err)
+			require.NotContains(t, string(body), `"schema":null`)
+		})
+	}
+
+	t.Run("usable schema is forwarded", func(t *testing.T) {
+		chatReq := &llm.Request{
+			ResponseFormat: &llm.ResponseFormat{
+				Type:       "json_schema",
+				JSONSchema: json.RawMessage(`{"name":"out","schema":{"type":"object","properties":{"a":{"type":"string"}}}}`),
+			},
+		}
+		opts := convertToTextOptions(chatReq)
+		require.NotNil(t, opts.Format)
+		require.JSONEq(t, `{"type":"object","properties":{"a":{"type":"string"}}}`, string(opts.Format.Schema))
+	})
+}

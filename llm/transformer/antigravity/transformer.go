@@ -1,7 +1,6 @@
 package antigravity
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -255,35 +254,16 @@ func (t *Transformer) TransformRequest(ctx context.Context, llmReq *llm.Request)
 	return httpReq, nil
 }
 
-// isObjectJSON reports whether raw is a non-null JSON object. Non-object JSON
-// such as false or [1] is rejected so it cannot shadow a usable fallback.
-func isObjectJSON(raw json.RawMessage) bool {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return false
-	}
-	var obj map[string]json.RawMessage
-	return json.Unmarshal(trimmed, &obj) == nil && obj != nil
-}
-
-// usableAntigravityResponseSchema reports whether raw is a JSON object schema
-// with actual content. Empty object shells are rejected because Antigravity
-// refuses a response schema whose object type carries no properties.
-func usableAntigravityResponseSchema(raw json.RawMessage) bool {
-	return isObjectJSON(raw) && !llm.IsEmptyObjectSchema(raw)
-}
-
 func (t *Transformer) patchGeminiRequest(ctx context.Context, req *gemini.GenerateContentRequest, llmReq *llm.Request) error {
 	// A. Schema Sanitization
 	// Priority: ResponseJsonSchema first (set by Gemini transformer), then
-	// ResponseSchema. A null or property-less empty shell in ResponseJsonSchema
-	// must not shadow a usable ResponseSchema.
+	// ResponseSchema.
 	if req.GenerationConfig != nil {
 		schemaData := req.GenerationConfig.ResponseJsonSchema
-		if !usableAntigravityResponseSchema(schemaData) {
+		if llm.IsEmptyObjectSchema(schemaData) {
 			schemaData = req.GenerationConfig.ResponseSchema
 		}
-		if !usableAntigravityResponseSchema(schemaData) {
+		if llm.IsEmptyObjectSchema(schemaData) {
 			schemaData = nil
 		}
 
@@ -301,9 +281,8 @@ func (t *Transformer) patchGeminiRequest(ctx context.Context, req *gemini.Genera
 			if err != nil && len(schemaData) > 0 {
 				slog.DebugContext(ctx, "failed to unmarshal response schema", slog.Any("error", err))
 			}
-			// Antigravity rejects a null/empty response schema; clear both fields
-			// so no stale "null" survives in the request.
-			req.GenerationConfig.ResponseJsonSchema = nil
+			// Antigravity rejects a null/empty response schema; clear the
+			// remaining key so no stale "null" survives in the request.
 			req.GenerationConfig.ResponseSchema = nil
 		}
 	}
@@ -317,16 +296,12 @@ func (t *Transformer) patchGeminiRequest(ctx context.Context, req *gemini.Genera
 
 			// CRITICAL: Antigravity API expects "parameters" field, not "parametersJsonSchema"
 			// The Gemini transformer sets ParametersJsonSchema, but Antigravity uses strict
-			// protobuf validation and only accepts "parameters" (lowercase, no camelCase)
-
-			// Priority: a usable JSON-object ParametersJsonSchema, then Parameters.
-			// A non-object ParametersJsonSchema (false, [1], ...) must not shadow a
-			// usable Parameters. Normalization guarantees no-argument tools still
-			// get {"type":"object","properties":{}}.
+			// protobuf validation and only accepts "parameters" (lowercase, no camelCase).
 			schemaData := fd.ParametersJsonSchema
-			if !isObjectJSON(schemaData) {
+			if llm.IsEmptyObjectSchema(schemaData) {
 				schemaData = fd.Parameters
 			}
+			// A no-argument tool still needs a real record schema.
 			schemaData = llm.NormalizeEmptySchema(schemaData)
 
 			var schema map[string]any

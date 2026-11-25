@@ -125,6 +125,14 @@ type TransformOptions struct {
 	// responses, anthropic messages) for all clients. Strong-typed to mirror
 	// ModelMapping; see llm.ReasoningEffortMapping.
 	ReasoningEffortMapping []llm.ReasoningEffortMapping `json:"reasoningEffortMapping,omitempty"`
+
+	// InjectEmptyToolPlaceholder adds an optional placeholder parameter to
+	// no-argument function tools. Some old OpenAI-compatible relays rewrite an
+	// empty properties map into Gemini's "parameters": null and then reject their
+	// own request with "expected record, received null"; a real placeholder
+	// property keeps the schema a record. Applies to transformed bodies and to
+	// replayed pass-through/override bodies alike.
+	InjectEmptyToolPlaceholder bool `json:"injectEmptyToolPlaceholder"`
 }
 
 // ModelProtocol force-specifies the outbound API protocols available for one model

@@ -4256,3 +4256,35 @@ func TestConvertLLMToGeminiRequest_ResponseFormatWithoutUsableSchema(t *testing.
 		require.Equal(t, "application/json", result.GenerationConfig.ResponseMIMEType)
 	})
 }
+
+func TestConvertLLMToGeminiRequest_DropsUnusableResponseSchema(t *testing.T) {
+	for _, wrapped := range []string{
+		`{"name":"out"}`,
+		`{"name":"out","schema":null}`,
+		`{"name":"out","schema":{}}`,
+		`{"name":"out","schema":{"type":"object"}}`,
+	} {
+		t.Run(wrapped, func(t *testing.T) {
+			result := convertLLMToGeminiRequest(&llm.Request{
+				Messages:       []llm.Message{{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("hi")}}},
+				ResponseFormat: &llm.ResponseFormat{Type: "json_schema", JSONSchema: json.RawMessage(wrapped)},
+			})
+			require.NotNil(t, result.GenerationConfig)
+			require.Nil(t, result.GenerationConfig.ResponseJsonSchema,
+				"Gemini rejects a null, empty, or property-less responseJsonSchema")
+			require.Equal(t, "application/json", result.GenerationConfig.ResponseMIMEType)
+		})
+	}
+
+	t.Run("usable schema is forwarded", func(t *testing.T) {
+		schema := json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}}}`)
+		result := convertLLMToGeminiRequest(&llm.Request{
+			Messages: []llm.Message{{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("hi")}}},
+			ResponseFormat: &llm.ResponseFormat{
+				Type:       "json_schema",
+				JSONSchema: json.RawMessage(`{"name":"out","schema":` + string(schema) + `}`),
+			},
+		})
+		require.JSONEq(t, string(schema), string(result.GenerationConfig.ResponseJsonSchema))
+	})
+}

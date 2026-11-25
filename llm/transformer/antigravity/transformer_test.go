@@ -531,3 +531,9 @@ func TestOAuthOnlyHeaders(t *testing.T) {
 	assert.Equal(t, ApiClient, httpReq.Headers.Get("X-Goog-Api-Client"))
 	assert.Equal(t, ClientMetadata, httpReq.Headers.Get("Client-Metadata"))
 }
+
+func TestTransformer_AllowPassThroughBody(t *testing.T) {
+	require.False(t, (&Transformer{}).AllowPassThroughBody(
+		context.Background(), &llm.Request{}, &httpclient.Request{}),
+		"Antigravity wraps the Gemini body in an envelope and must never reuse the raw Gemini body")
+}

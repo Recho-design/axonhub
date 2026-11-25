@@ -3162,3 +3162,101 @@ func TestConvertGeminiToLLMRequest_NullToolParameters(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertGeminiToLLMRequest_NullResponseJsonSchemaFallsBack(t *testing.T) {
+	valid := json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}}}`)
+
+	for _, nullSchema := range []json.RawMessage{
+		json.RawMessage("null"),
+		json.RawMessage("null "),
+		json.RawMessage("{}"),
+	} {
+		t.Run(string(nullSchema), func(t *testing.T) {
+			result, err := convertGeminiToLLMRequest(&GenerateContentRequest{
+				Contents: []*Content{{Role: "user", Parts: []*Part{{Text: "hi"}}}},
+				GenerationConfig: &GenerationConfig{
+					ResponseJsonSchema: nullSchema,
+					ResponseSchema:     valid,
+					ResponseMIMEType:   "application/json",
+				},
+			})
+			require.NoError(t, err)
+			require.NotNil(t, result.ResponseFormat)
+			require.Equal(t, "json_schema", result.ResponseFormat.Type)
+
+			var wrapper struct {
+				Schema json.RawMessage `json:"schema"`
+			}
+			require.NoError(t, json.Unmarshal(result.ResponseFormat.JSONSchema, &wrapper))
+			require.JSONEq(t, string(valid), string(wrapper.Schema))
+		})
+	}
+}
+
+func TestConvertGeminiToLLMRequest_UnusableSchemasFallBackToJSONObject(t *testing.T) {
+	result, err := convertGeminiToLLMRequest(&GenerateContentRequest{
+		Contents: []*Content{{Role: "user", Parts: []*Part{{Text: "hi"}}}},
+		GenerationConfig: &GenerationConfig{
+			ResponseJsonSchema: json.RawMessage("null"),
+			ResponseSchema:     json.RawMessage("null"),
+			ResponseMIMEType:   "application/json",
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result.ResponseFormat)
+	require.Equal(t, "json_object", result.ResponseFormat.Type)
+	require.Nil(t, result.ResponseFormat.JSONSchema)
+}
+
+func TestGenerationConfigUnmarshalSnakeCase(t *testing.T) {
+	var gc GenerationConfig
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"response_schema":{"type":"object","properties":{"a":{"type":"string"}}},
+		"response_json_schema":{"type":"string"}
+	}`), &gc))
+	require.JSONEq(t, `{"type":"object","properties":{"a":{"type":"string"}}}`, string(gc.ResponseSchema))
+	require.JSONEq(t, `{"type":"string"}`, string(gc.ResponseJsonSchema))
+}
+
+func TestFunctionDeclarationUnmarshalSnakeCase(t *testing.T) {
+	var fd FunctionDeclaration
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"name":"f",
+		"parameters_json_schema":{"type":"object"},
+		"response_json_schema":{"type":"string"}
+	}`), &fd))
+	require.Equal(t, "f", fd.Name)
+	require.JSONEq(t, `{"type":"object"}`, string(fd.ParametersJsonSchema))
+	require.JSONEq(t, `{"type":"string"}`, string(fd.ResponseJsonSchema))
+}
+
+// TestConvertGeminiToLLMRequest_LowercasesNestedSchemaTypes pins that uppercase
+// types inside additionalProperties and type arrays are lowered recursively.
+func TestConvertGeminiToLLMRequest_LowercasesNestedSchemaTypes(t *testing.T) {
+	result, err := convertGeminiToLLMRequest(&GenerateContentRequest{
+		Contents: []*Content{{Role: "user", Parts: []*Part{{Text: "hi"}}}},
+		Tools: []*Tool{{FunctionDeclarations: []*FunctionDeclaration{{
+			Name:                 "f",
+			ParametersJsonSchema: json.RawMessage(`{"type":"OBJECT","additionalProperties":{"type":"STRING"}}`),
+		}}}},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Tools, 1)
+	require.JSONEq(t,
+		`{"type":"object","additionalProperties":{"type":"string"}}`,
+		string(result.Tools[0].Function.ParametersJsonSchema))
+}
+
+func TestConvertGeminiToLLMRequest_LowercasesTypeArrays(t *testing.T) {
+	result, err := convertGeminiToLLMRequest(&GenerateContentRequest{
+		Contents: []*Content{{Role: "user", Parts: []*Part{{Text: "hi"}}}},
+		Tools: []*Tool{{FunctionDeclarations: []*FunctionDeclaration{{
+			Name:                 "f",
+			ParametersJsonSchema: json.RawMessage(`{"type":"OBJECT","properties":{"x":{"type":["STRING","NULL"]}}}`),
+		}}}},
+	})
+	require.NoError(t, err)
+	require.JSONEq(t,
+		`{"type":"object","properties":{"x":{"type":["string","null"]}}}`,
+		string(result.Tools[0].Function.ParametersJsonSchema))
+}

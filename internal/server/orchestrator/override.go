@@ -230,9 +230,9 @@ func applyOverrideRequestBody(outbound *PersistentOutboundTransformer) pipeline.
 		}
 
 		request.Body = body
-		// Override templates or earlier stages may have written an explicit null tool
-		// schema; repair it in place before the request leaves for the provider.
-		request.Body = sanitizeNullToolSchemasInRawBody(request.Body, outbound.currentAPIFormat(request))
+		// Override operations may have introduced or removed tool schemas; the
+		// placeholder switch applies to the final overridden body.
+		request.Body = outbound.injectToolPlaceholders(request.Body, outbound.currentAPIFormat(request))
 
 		return request, nil
 	})

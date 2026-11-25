@@ -463,6 +463,8 @@
   "channels.dialogs.fields.transformOptions.forceArrayInputs.description": "Force the channel to accept array format for inputs",
   "channels.dialogs.fields.transformOptions.replaceDeveloperRoleWithSystem.label": "Replace developer role with system",
   "channels.dialogs.fields.transformOptions.replaceDeveloperRoleWithSystem.description": "Replace developer role with system before sending requests for channels that do not support the developer role",
+  "channels.dialogs.fields.transformOptions.injectEmptyToolPlaceholder.label": "Inject placeholder for parameterless tools",
+  "channels.dialogs.fields.transformOptions.injectEmptyToolPlaceholder.description": "Compatible with legacy proxies that convert parameterless tools to null (e.g., \"expected record, received null\"). When enabled, injects an optional placeholder parameter into parameterless tools, altering the request body and potentially reducing prompt cache hits.",
   "channels.dialogs.fields.transformOptions.reasoningEffortMapping.label": "reasoning_effort mapping",
   "channels.dialogs.fields.transformOptions.reasoningEffortMapping.description": "Remap reasoning_effort before sending to the upstream. Each entry replaces the source value with the target value; unmatched values pass through. e.g. from \"xhigh\" to \"max\" for non-standard OpenAI-compatible channels that only accept max",
   "channels.dialogs.fields.transformOptions.reasoningEffortMapping.fromPlaceholder": "source effort (e.g. xhigh)",

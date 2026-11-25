@@ -369,59 +369,6 @@ func TestFunctionEffectiveParameters(t *testing.T) {
 	}
 }
 
-func TestNormalizeEmptySchema_EmptyObjectShells(t *testing.T) {
-	tests := []struct {
-		name   string
-		input  json.RawMessage
-		strict *bool
-		want   json.RawMessage
-	}{
-		{
-			name:  "empty object literal becomes empty object schema",
-			input: json.RawMessage("{}"),
-			want:  llm.EmptyObjectSchema,
-		},
-		{
-			name:  "bare object type gains empty properties",
-			input: json.RawMessage(`{"type":"object"}`),
-			want:  json.RawMessage(`{"type":"object","properties":{}}`),
-		},
-		{
-			name:  "null properties with no metadata collapses to template",
-			input: json.RawMessage(`{"type":"object","properties":null}`),
-			want:  llm.EmptyObjectSchema,
-		},
-		{
-			name:  "empty required and false additionalProperties are preserved",
-			input: json.RawMessage(`{"type":"object","required":[],"additionalProperties":false}`),
-			want:  json.RawMessage(`{"type":"object","required":[],"additionalProperties":false,"properties":{}}`),
-		},
-		{
-			name:  "decorated shell keeps description and gains properties",
-			input: json.RawMessage(`{"type":"object","description":"no args"}`),
-			want:  json.RawMessage(`{"type":"object","properties":{},"description":"no args"}`),
-		},
-		{
-			name:   "decorated strict shell gains strict members",
-			input:  json.RawMessage(`{"type":"object","description":"no args"}`),
-			strict: lo.ToPtr(true),
-			want:   json.RawMessage(`{"type":"object","properties":{},"required":[],"additionalProperties":false,"description":"no args"}`),
-		},
-		{
-			name:   "bare strict shell becomes strict template",
-			input:  json.RawMessage(`{"type":"object"}`),
-			strict: lo.ToPtr(true),
-			want:   llm.StrictEmptyObjectSchema,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.JSONEq(t, string(tt.want), string(llm.NormalizeFunctionParameters(tt.input, tt.strict)))
-		})
-	}
-}
-
 func TestNormalizeFunctionParameters_PreservesComplexSchemas(t *testing.T) {
 	// These schemas carry real constraints. Rewriting them would change the
 	// contract the model sees, so they must pass through byte-for-byte.

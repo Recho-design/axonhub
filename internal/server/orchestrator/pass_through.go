@@ -177,6 +177,7 @@ func applyResponsesTransportRequestBody(outbound *PersistentOutboundTransformer)
 		if err != nil {
 			return nil, err
 		}
+		body = outbound.injectToolPlaceholders(body, target)
 
 		cloned := *request
 		cloned.Body = body
@@ -241,6 +242,15 @@ func applyPassThroughRequestBody(outbound *PersistentOutboundTransformer, hooks 
 			return request, nil
 		}
 
+		// The replayed body bypasses the transformer, so the placeholder switch
+		// must be applied to the raw bytes here. The body is in the inbound format
+		// (pass-through requires identical inbound and outbound formats).
+		bodyFormat := llmReq.APIFormat
+		if request.APIFormat != "" {
+			bodyFormat = llm.APIFormat(request.APIFormat)
+		}
+		body = outbound.injectToolPlaceholders(body, bodyFormat)
+
 		request.Body = body
 
 		// The replayed body keeps the inbound media type: sync Content-Type so a JSON
@@ -270,6 +280,31 @@ func (p *PersistentOutboundTransformer) allowPassThroughBody(ctx context.Context
 	}
 
 	return policy.AllowPassThroughBody(ctx, llmReq, providerReq)
+}
+
+// injectEmptyToolPlaceholderEnabled reports whether the current channel asks for
+// no-argument tools to carry an optional placeholder parameter. Old
+// OpenAI-compatible relays rewrite an empty properties map into Gemini's
+// "parameters": null and then reject their own request, so a real placeholder
+// property keeps the schema a record.
+func (p *PersistentOutboundTransformer) injectEmptyToolPlaceholderEnabled() bool {
+	channel := p.GetCurrentChannel()
+	if channel == nil || channel.Settings == nil {
+		return false
+	}
+
+	return channel.Settings.TransformOptions.InjectEmptyToolPlaceholder
+}
+
+// injectToolPlaceholders applies llm.InjectToolPlaceholders to a raw body when
+// the current channel enables the placeholder switch. It returns the body
+// unchanged otherwise, so a normal body keeps its exact bytes.
+func (p *PersistentOutboundTransformer) injectToolPlaceholders(body []byte, apiFormat llm.APIFormat) []byte {
+	if !p.injectEmptyToolPlaceholderEnabled() {
+		return body
+	}
+
+	return llm.InjectToolPlaceholders(body, apiFormat)
 }
 
 func (p *PersistentOutboundTransformer) allowPassThroughResponse(ctx context.Context) bool {
@@ -315,10 +350,6 @@ func applyPassThroughRequestHeaders(outbound *PersistentOutboundTransformer) pip
 
 func mergePassThroughRequestBody(rawBody []byte, apiFormat llm.APIFormat, model string) ([]byte, error) {
 	body := append([]byte(nil), rawBody...)
-
-	// Patch null tool schemas before the model-patch early return: Gemini encodes the
-	// model in the URL, so it returns below but still needs the schema repair.
-	body = sanitizeNullToolSchemasInRawBody(body, apiFormat)
 
 	if !passThroughBodyNeedsModelPatch(apiFormat) {
 		return body, nil

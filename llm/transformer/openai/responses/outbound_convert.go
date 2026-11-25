@@ -530,13 +530,12 @@ func applyResponsesParameters(tool *Tool, normalized json.RawMessage, strict *bo
 		params = map[string]any{}
 	}
 
-	// The incoming normalized schema already came through
-	// llm.NormalizeFunctionParameters, which fills the properties of every true
-	// no-argument object shell. A "type":"object" schema that still lacks
-	// properties here therefore carries a real constraint (additionalProperties
-	// dictionary, patternProperties, anyOf/oneOf/allOf, $ref, ...); forcing an
-	// empty properties map would corrupt it, so only strict mode pads the plain
-	// object case.
+	// llm.NormalizeFunctionParameters only replaces the bare no-argument forms
+	// (nil, blank, null, {}, and exactly {"type":"object"}). A schema that still
+	// lacks properties here therefore carries a real constraint
+	// (additionalProperties dictionary, patternProperties, anyOf/oneOf/allOf,
+	// $ref, ...); forcing an empty properties map would corrupt it, so only
+	// strict mode pads the plain object case.
 	if strict != nil && *strict {
 		if typeName, ok := params["type"].(string); ok && typeName == "object" && !hasCompositionOrRef(params) {
 			if _, ok := params["properties"].(map[string]any); !ok {

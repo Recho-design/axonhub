@@ -1,7 +1,6 @@
 package gemini
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -905,8 +904,8 @@ func convertGeminiCandidateToLLMChoiceWithState(candidate *Candidate, isStream b
 // extractJSONSchema extracts the inner "schema" field from an OpenAI json_schema
 // object. OpenAI format: {"name": "...", "schema": {...}, "strict": ...}; Gemini
 // expects the schema content directly without the wrapper. A wrapper whose
-// "schema" is null yields "null" (never the wrapper itself), and a wrapper with
-// no "schema" key at all yields nil.
+// "schema" is null yields "null" (never the wrapper itself); a wrapper without
+// a "schema" key is treated as the schema itself.
 func extractJSONSchema(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 {
 		return nil
@@ -914,22 +913,13 @@ func extractJSONSchema(raw json.RawMessage) json.RawMessage {
 	if schema := gjson.GetBytes(raw, "schema"); schema.Exists() {
 		return json.RawMessage(schema.Raw)
 	}
-	if gjson.GetBytes(raw, "name").Exists() &&
-		!gjson.GetBytes(raw, "type").Exists() &&
-		!gjson.GetBytes(raw, "properties").Exists() {
-		return nil
-	}
 	return raw
 }
 
 // isUsableGeminiResponseSchema reports whether an extracted schema can be sent
-// to Gemini. Null, empty, and property-less empty object shells are rejected
-// because Gemini refuses a responseJsonSchema whose object type carries no
-// properties ("Type.OBJECT cannot be empty").
+// to Gemini. Null, empty, and property-less object shells are rejected because
+// Gemini refuses a responseJsonSchema whose object type carries no properties
+// ("Type.OBJECT cannot be empty").
 func isUsableGeminiResponseSchema(schema json.RawMessage) bool {
-	trimmed := bytes.TrimSpace(schema)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("{}")) {
-		return false
-	}
 	return !llm.IsEmptyObjectSchema(schema)
 }

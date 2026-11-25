@@ -3,10 +3,6 @@ package responses
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 
 	"github.com/looplj/axonhub/llm"
 )
@@ -187,50 +183,11 @@ func buildRawOnlyToolFragments(tools []Tool, rawTools []json.RawMessage) []llm.O
 			Name:                 tools[i].Name,
 			OriginalIndex:        i,
 			RepresentedToolCount: representedNamespaceToolCount(tools[i]),
-			Raw:                  sanitizeRawToolFragment(cloneRaw(rawTools[i])),
+			Raw:                  cloneRaw(rawTools[i]),
 		})
 	}
 
 	return fragments
-}
-
-// sanitizeRawToolFragment rewrites a literal "parameters": null inside the
-// function sub-tools of a raw namespace tool. An untouched namespace fragment is
-// replayed upstream verbatim (to preserve prompt cache prefixes), so a null
-// schema must be fixed here or it leaks to the provider. A sub-tool that omits
-// "parameters" entirely is left byte-identical.
-func sanitizeRawToolFragment(raw json.RawMessage) json.RawMessage {
-	if len(raw) == 0 || !gjson.ValidBytes(raw) || gjson.GetBytes(raw, "type").String() != "namespace" {
-		return raw
-	}
-
-	subTools := gjson.GetBytes(raw, "tools")
-	if !subTools.IsArray() {
-		return raw
-	}
-
-	out := raw
-	for j, subTool := range subTools.Array() {
-		parameters := subTool.Get("parameters")
-		isFunction := subTool.Get("type").String() == "function" ||
-			(subTool.Get("type").String() == "" && parameters.Exists())
-		if !isFunction || !parameters.Exists() || parameters.Type != gjson.Null {
-			continue
-		}
-
-		replacement := llm.EmptyObjectSchema
-		if gjson.GetBytes(out, fmt.Sprintf("tools.%d.strict", j)).Bool() {
-			replacement = llm.StrictEmptyObjectSchema
-		}
-
-		updated, err := sjson.SetRawBytes(out, fmt.Sprintf("tools.%d.parameters", j), replacement)
-		if err != nil {
-			continue
-		}
-		out = updated
-	}
-
-	return out
 }
 
 func representedNamespaceToolCount(tool Tool) int {
@@ -546,7 +503,7 @@ func mergeRawOnlyTools(structuredRaw json.RawMessage, requestExt *llm.OpenAIResp
 
 	for i := 0; i < total; i++ {
 		if fragment, ok := rawByIndex[i]; ok {
-			tools = append(tools, cloneRaw(sanitizeRawToolFragment(fragment.Raw)))
+			tools = append(tools, cloneRaw(fragment.Raw))
 			structuredIndex += fragment.RepresentedToolCount
 			if structuredIndex > len(structuredTools) {
 				return nil, false

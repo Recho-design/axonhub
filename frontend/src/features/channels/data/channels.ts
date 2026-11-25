@@ -127,6 +127,7 @@ const CREATE_CHANNEL_MUTATION = `
           forceArrayInstructions
           forceArrayInputs
           replaceDeveloperRoleWithSystem
+          injectEmptyToolPlaceholder
           reasoningEffortMapping { from to }
         }
         passThroughUserAgent
@@ -227,6 +228,7 @@ const DUPLICATE_CHANNEL_MUTATION = `
           forceArrayInstructions
           forceArrayInputs
           replaceDeveloperRoleWithSystem
+          injectEmptyToolPlaceholder
           reasoningEffortMapping { from to }
         }
         passThroughUserAgent
@@ -327,6 +329,7 @@ const BULK_CREATE_CHANNELS_MUTATION = `
           forceArrayInstructions
           forceArrayInputs
           replaceDeveloperRoleWithSystem
+          injectEmptyToolPlaceholder
           reasoningEffortMapping { from to }
         }
         passThroughUserAgent
@@ -426,6 +429,7 @@ const CHANNEL_FIELDS_FRAGMENT = `
           forceArrayInstructions
           forceArrayInputs
           replaceDeveloperRoleWithSystem
+          injectEmptyToolPlaceholder
           reasoningEffortMapping { from to }
         }
         passThroughUserAgent
@@ -668,6 +672,7 @@ const BULK_IMPORT_CHANNELS_MUTATION = `
             forceArrayInstructions
             forceArrayInputs
             replaceDeveloperRoleWithSystem
+            injectEmptyToolPlaceholder
             reasoningEffortMapping { from to }
           }
           passThroughUserAgent
@@ -915,6 +920,7 @@ const BULK_UPDATE_CHANNEL_ORDERING_MUTATION = `
             forceArrayInstructions
             forceArrayInputs
             replaceDeveloperRoleWithSystem
+            injectEmptyToolPlaceholder
             reasoningEffortMapping { from to }
           }
           passThroughUserAgent
@@ -1183,6 +1189,7 @@ const CHANNEL_QUERY_FULL_NODE_SELECTION = `
               forceArrayInstructions
               forceArrayInputs
               replaceDeveloperRoleWithSystem
+              injectEmptyToolPlaceholder
               reasoningEffortMapping { from to }
             }
             passThroughUserAgent

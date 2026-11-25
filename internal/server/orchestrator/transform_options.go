@@ -22,11 +22,18 @@ func applyTransformOptions(req *llm.Request, channelSettings *objects.ChannelSet
 
 	if !transformOptions.ForceArrayInstructions &&
 		!transformOptions.ForceArrayInputs &&
-		!transformOptions.ReplaceDeveloperRoleWithSystem {
+		!transformOptions.ReplaceDeveloperRoleWithSystem &&
+		!transformOptions.InjectEmptyToolPlaceholder {
 		return req
 	}
 
 	newReq := *req
+
+	if transformOptions.InjectEmptyToolPlaceholder {
+		// Clone the tools slice (and the touched Function values) so the original
+		// request is never modified in place.
+		newReq.Tools = llm.InjectEmptyToolPlaceholders(newReq.Tools)
+	}
 
 	if transformOptions.ForceArrayInstructions {
 		newReq.TransformOptions.ArrayInstructions = lo.ToPtr(true)

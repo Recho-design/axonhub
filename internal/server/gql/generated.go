@@ -2195,6 +2195,7 @@ type ComplexityRoot struct {
 	TransformOptions struct {
 		ForceArrayInputs               func(childComplexity int) int
 		ForceArrayInstructions         func(childComplexity int) int
+		InjectEmptyToolPlaceholder     func(childComplexity int) int
 		ReasoningEffortMapping         func(childComplexity int) int
 		ReplaceDeveloperRoleWithSystem func(childComplexity int) int
 	}
@@ -12229,6 +12230,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.TransformOptions.ForceArrayInstructions(childComplexity), true
+	case "TransformOptions.injectEmptyToolPlaceholder":
+		if e.complexity.TransformOptions.InjectEmptyToolPlaceholder == nil {
+			break
+		}
+
+		return e.complexity.TransformOptions.InjectEmptyToolPlaceholder(childComplexity), true
 	case "TransformOptions.reasoningEffortMapping":
 		if e.complexity.TransformOptions.ReasoningEffortMapping == nil {
 			break
@@ -27265,6 +27272,8 @@ func (ec *executionContext) fieldContext_ChannelSettings_transformOptions(_ cont
 				return ec.fieldContext_TransformOptions_replaceDeveloperRoleWithSystem(ctx, field)
 			case "reasoningEffortMapping":
 				return ec.fieldContext_TransformOptions_reasoningEffortMapping(ctx, field)
+			case "injectEmptyToolPlaceholder":
+				return ec.fieldContext_TransformOptions_injectEmptyToolPlaceholder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type TransformOptions", field.Name)
 		},
@@ -65459,6 +65468,35 @@ func (ec *executionContext) fieldContext_TransformOptions_reasoningEffortMapping
 	return fc, nil
 }
 
+func (ec *executionContext) _TransformOptions_injectEmptyToolPlaceholder(ctx context.Context, field graphql.CollectedField, obj *objects.TransformOptions) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_TransformOptions_injectEmptyToolPlaceholder,
+		func(ctx context.Context) (any, error) {
+			return obj.InjectEmptyToolPlaceholder, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_TransformOptions_injectEmptyToolPlaceholder(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TransformOptions",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _TriggerBackupPayload_success(ctx context.Context, field graphql.CollectedField, obj *TriggerBackupPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -92589,7 +92627,7 @@ func (ec *executionContext) unmarshalInputTransformOptionsInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"forceArrayInstructions", "forceArrayInputs", "replaceDeveloperRoleWithSystem", "reasoningEffortMapping"}
+	fieldsInOrder := [...]string{"forceArrayInstructions", "forceArrayInputs", "replaceDeveloperRoleWithSystem", "reasoningEffortMapping", "injectEmptyToolPlaceholder"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -92624,6 +92662,13 @@ func (ec *executionContext) unmarshalInputTransformOptionsInput(ctx context.Cont
 				return it, err
 			}
 			it.ReasoningEffortMapping = data
+		case "injectEmptyToolPlaceholder":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("injectEmptyToolPlaceholder"))
+			data, err := ec.unmarshalOBoolean2bool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.InjectEmptyToolPlaceholder = data
 		}
 	}
 
@@ -119221,6 +119266,11 @@ func (ec *executionContext) _TransformOptions(ctx context.Context, sel ast.Selec
 			}
 		case "reasoningEffortMapping":
 			out.Values[i] = ec._TransformOptions_reasoningEffortMapping(ctx, field, obj)
+		case "injectEmptyToolPlaceholder":
+			out.Values[i] = ec._TransformOptions_injectEmptyToolPlaceholder(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
